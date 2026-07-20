@@ -1,0 +1,107 @@
+{
+  "indexes": [
+    { "collectionGroup": "contacts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "updatedAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "contacts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "updatedAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "contacts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "assignedTo", "order": "ASCENDING" }, { "fieldPath": "updatedAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "contacts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "assignedTo", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "updatedAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "contacts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "phones", "arrayConfig": "CONTAINS" }
+    ]},
+    { "collectionGroup": "channelIdentities", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "contactId", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "channelAccounts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "channel", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "channelAccounts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "channel", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "channelAccounts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "channel", "order": "ASCENDING" }, { "fieldPath": "isDefault", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "conversations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "conversations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "conversations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "assignedTo", "order": "ASCENDING" }, { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "conversations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "assignedTo", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "lastMessageAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "messages", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "conversationId", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "messages", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "providerMessageId", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "messages", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "leadId", "order": "ASCENDING" }, { "fieldPath": "timestamp", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "leads", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "leads", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "leadStatus", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "leads", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "assignedTo", "order": "ASCENDING" }, { "fieldPath": "leadStatus", "order": "ASCENDING" }, { "fieldPath": "updatedAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "leads", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "assignedTo", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "leads", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "assignedTo", "order": "ASCENDING" }, { "fieldPath": "leadStatus", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "followUps", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "dueAt", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "followUps", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "assignedTo", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "dueAt", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "orders", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "updatedAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "orders", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "orders", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "assignedTo", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "orderItems", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orderId", "order": "ASCENDING" }, { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "lineNumber", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "quotations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "quotations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "assignedTo", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "auditLogs", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "entityId", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "webhookEvents", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "processingStatus", "order": "ASCENDING" }, { "fieldPath": "receivedAt", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "outbox", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "nextAttemptAt", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "users", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "role", "order": "ASCENDING" }, { "fieldPath": "active", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "automationJobs", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "type", "order": "ASCENDING" }, { "fieldPath": "nextAttemptAt", "order": "ASCENDING" }
+    ]}
+  ],
+  "fieldOverrides": []
+}
