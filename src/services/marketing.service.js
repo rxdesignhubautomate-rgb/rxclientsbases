@@ -90,13 +90,13 @@ export class MarketingService {
     return this.getAudience(orgId, audienceId);
   }
 
-  listAudiences(orgId, options = {}) {
-    return this.store.find(COLLECTIONS.marketingAudiences, {
+  async listAudiences(orgId, options = {}) {
+    const result = await this.store.find(COLLECTIONS.marketingAudiences, {
       filters: [["orgId", "==", orgId]],
-      orderBy: ["updatedAt", "desc"],
       limit: options.limit || 100,
       cursor: options.cursor
     });
+    return { ...result, items: sortRecent(result.items) };
   }
 
   async getAudience(orgId, audienceId, { includeContacts = true } = {}) {
@@ -143,15 +143,14 @@ export class MarketingService {
     return campaign;
   }
 
-  listCampaigns(orgId, options = {}) {
-    const filters = [["orgId", "==", orgId]];
-    if (options.status) filters.push(["status", "==", options.status]);
-    return this.store.find(COLLECTIONS.marketingCampaigns, {
-      filters,
-      orderBy: ["updatedAt", "desc"],
+  async listCampaigns(orgId, options = {}) {
+    const result = await this.store.find(COLLECTIONS.marketingCampaigns, {
+      filters: [["orgId", "==", orgId]],
       limit: options.limit || 100,
       cursor: options.cursor
     });
+    const items = options.status ? result.items.filter((item) => item.status === options.status) : result.items;
+    return { ...result, items: sortRecent(items) };
   }
 
   async getCampaign(orgId, campaignId, { includeEnrollments = false } = {}) {
@@ -159,11 +158,10 @@ export class MarketingService {
     if (!campaign || campaign.orgId !== orgId) throw new NotFoundError("Marketing campaign");
     if (!includeEnrollments) return campaign;
     const enrollments = await this.store.find(COLLECTIONS.campaignEnrollments, {
-      filters: [["orgId", "==", orgId], ["campaignId", "==", campaignId]],
-      orderBy: ["createdAt", "desc"],
+      filters: [["campaignId", "==", campaignId]],
       limit: MAX_AUDIENCE_SIZE
     });
-    return { ...campaign, enrollments: enrollments.items };
+    return { ...campaign, enrollments: sortRecent(enrollments.items.filter((item) => item.orgId === orgId)) };
   }
 
   async launchCampaign(orgId, campaignId, input = {}, actor = {}) {
@@ -215,7 +213,7 @@ export class MarketingService {
   async pauseCampaign(orgId, campaignId, actor = {}) {
     const campaign = await this.getCampaign(orgId, campaignId);
     if (campaign.status !== "ACTIVE") throw new ConflictError("Only an active campaign can be paused");
-    await this.moveCampaignEnrollments(orgId, campaignId, "ACTIVE", "PAUSED");
+    await this.moveCampaignEnrollments(orgId, campaignId, "ACTIVE", "PAUSED", { nextRunAt: null });
     await this.store.update(COLLECTIONS.marketingCampaigns, campaignId, { status: "PAUSED", pausedAt: now(), updatedAt: now() });
     await this.audit.write({ orgId, actorId: actor.userId || "SYSTEM", action: "MARKETING_CAMPAIGN_PAUSED", entityType: "MARKETING_CAMPAIGN", entityId: campaignId });
     return this.getCampaign(orgId, campaignId);
@@ -232,12 +230,13 @@ export class MarketingService {
 
   async processDue(limit = 20) {
     const due = await this.store.find(COLLECTIONS.campaignEnrollments, {
-      filters: [["status", "in", ["ACTIVE", "PROCESSING"]], ["nextRunAt", "<=", now()]],
+      filters: [["nextRunAt", "<=", now()]],
       orderBy: ["nextRunAt", "asc"],
-      limit
+      limit: Math.min(limit * 5, 100)
     });
     const results = [];
-    for (const enrollment of due.items) {
+    const runnable = due.items.filter((item) => ["ACTIVE", "PROCESSING"].includes(item.status)).slice(0, limit);
+    for (const enrollment of runnable) {
       try {
         results.push(await this.processEnrollment(enrollment));
       } catch (error) {
@@ -333,11 +332,11 @@ export class MarketingService {
 
   async stopContactEnrollments(orgId, contactId, targetStatus, patch = {}) {
     const result = await this.store.find(COLLECTIONS.campaignEnrollments, {
-      filters: [["orgId", "==", orgId], ["contactId", "==", contactId]],
+      filters: [["contactId", "==", contactId]],
       limit: MAX_AUDIENCE_SIZE
     });
     let changed = 0;
-    for (const enrollment of result.items.filter((item) => ACTIVE_ENROLLMENT_STATUSES.has(item.status) && item.status !== targetStatus)) {
+    for (const enrollment of result.items.filter((item) => item.orgId === orgId && ACTIVE_ENROLLMENT_STATUSES.has(item.status) && item.status !== targetStatus)) {
       const fromActive = ["ACTIVE", "PROCESSING", "PAUSED"].includes(enrollment.status);
       const delta = {};
       if (fromActive) delta.active = -1;
@@ -380,11 +379,12 @@ export class MarketingService {
 
   async moveCampaignEnrollments(orgId, campaignId, fromStatus, toStatus, patch = {}) {
     const result = await this.store.find(COLLECTIONS.campaignEnrollments, {
-      filters: [["orgId", "==", orgId], ["campaignId", "==", campaignId], ["status", "==", fromStatus]],
+      filters: [["campaignId", "==", campaignId]],
       limit: MAX_AUDIENCE_SIZE
     });
-    if (!result.items.length) return 0;
-    return this.store.batchUpdate(COLLECTIONS.campaignEnrollments, result.items.map((item) => ({
+    const matching = result.items.filter((item) => item.orgId === orgId && item.status === fromStatus);
+    if (!matching.length) return 0;
+    return this.store.batchUpdate(COLLECTIONS.campaignEnrollments, matching.map((item) => ({
       id: item.campaignEnrollmentId || item.id,
       data: { status: toStatus, ...patch, updatedAt: now() }
     })));
@@ -465,4 +465,8 @@ function eligibilitySummary(contacts) {
 
 function emptyStats() {
   return { total: 0, eligible: 0, active: 0, suppressed: 0, sent: 0, replied: 0, converted: 0, completed: 0, optedOut: 0 };
+}
+
+function sortRecent(items = []) {
+  return [...items].sort((left, right) => (toDate(right.updatedAt || right.createdAt)?.getTime() || 0) - (toDate(left.updatedAt || left.createdAt)?.getTime() || 0));
 }

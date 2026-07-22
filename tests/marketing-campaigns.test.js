@@ -90,4 +90,37 @@ describe("WhatsApp marketing campaigns", () => {
     expect(contact.marketingConsent.status).toBe("OPTED_OUT");
     expect(contact.marketingConsent.source).toBe("WHATSAPP_REPLY");
   });
+
+  it("loads Marketing data and due work without composite Firestore indexes", async () => {
+    const core = makeCore();
+    const seeded = await seedConversation(core);
+    const marketing = makeMarketing(core);
+    await marketing.recordConsent("RXDH", seeded.contact.contactId, { status: "OPTED_IN", source: "IN_PERSON", note: "Requested updates" });
+    const audience = await marketing.createAudience("RXDH", { name: "Index-safe audience", contactIds: [seeded.contact.contactId] });
+    const campaign = await marketing.createCampaign("RXDH", {
+      name: "Index-safe campaign",
+      audienceId: audience.audienceId,
+      interestLabel: "catalogue printing",
+      templateId: "interest_followup",
+      steps: [{ delayDays: 0, messageLine: "We can share the available options." }]
+    });
+    await marketing.launchCampaign("RXDH", campaign.campaignId);
+
+    const originalFind = core.store.find.bind(core.store);
+    core.store.find = async (collection, options = {}) => {
+      if (["marketingAudiences", "marketingCampaigns"].includes(collection) && options.orderBy) {
+        throw new Error("COMPOSITE_INDEX_REQUIRED");
+      }
+      if (collection === "campaignEnrollments") {
+        if ((options.filters || []).length > 1) throw new Error("COMPOSITE_INDEX_REQUIRED");
+        if (options.orderBy && options.filters?.[0]?.[0] !== options.orderBy[0]) throw new Error("COMPOSITE_INDEX_REQUIRED");
+      }
+      return originalFind(collection, options);
+    };
+
+    await expect(marketing.listAudiences("RXDH", { limit: 100 })).resolves.toMatchObject({ items: [{ audienceId: audience.audienceId }] });
+    await expect(marketing.listCampaigns("RXDH", { limit: 100 })).resolves.toMatchObject({ items: [{ campaignId: campaign.campaignId }] });
+    await expect(marketing.getCampaign("RXDH", campaign.campaignId, { includeEnrollments: true })).resolves.toMatchObject({ campaignId: campaign.campaignId });
+    await expect(marketing.processDue(10)).resolves.toHaveLength(1);
+  });
 });

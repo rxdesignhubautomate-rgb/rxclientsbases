@@ -36,7 +36,7 @@ firebase use clientdatabase-10e9b
 firebase deploy --only firestore:indexes
 ```
 
-New indexes cover `marketingAudiences`, `marketingCampaigns` and `campaignEnrollments`. Wait until the Firebase console shows every index as **Enabled** before launching a campaign.
+The included indexes improve performance as campaign volume grows. The current index-safe build uses Firestore's automatic single-field indexes for page loading and scheduling, so a missing composite index no longer makes the Marketing page return HTTP 500. Deploy the included indexes before large campaigns and wait until Firebase shows them as **Enabled**.
 
 ## 3. Deploy the backend to Render
 
