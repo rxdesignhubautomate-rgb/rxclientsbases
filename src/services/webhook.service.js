@@ -123,6 +123,9 @@ export class WebhookService {
       if (!lead.conversationId) {
         await this.store.update(COLLECTIONS.leads, lead.leadId, { conversationId: conversation.conversationId, updatedAt: now() });
       }
+      const quotedMessage = event.replyToProviderMessageId
+        ? await this.messages.findByProviderId(this.orgId, event.replyToProviderMessageId)
+        : null;
       const saved = await this.messages.createInbound({
         orgId: this.orgId,
         conversationId: conversation.conversationId,
@@ -135,6 +138,7 @@ export class WebhookService {
         providerMessageId: event.providerMessageId,
         providerTimestamp: event.providerTimestamp,
         senderId: event.externalUserId,
+        replyToMessageId: quotedMessage?.messageId || quotedMessage?.id || null,
         metadata: event.metadata
       });
       if (!saved.duplicate) {

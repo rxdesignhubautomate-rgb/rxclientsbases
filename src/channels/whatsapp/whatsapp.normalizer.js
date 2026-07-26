@@ -8,6 +8,7 @@ const TYPE_MAP = {
   contacts: "CONTACT",
   button: "INTERACTIVE",
   interactive: "INTERACTIVE",
+  reaction: "REACTION",
   sticker: "IMAGE"
 };
 
@@ -42,7 +43,10 @@ export function normalizeWhatsAppWebhook(payload) {
             providerType: message.type,
             referral: message.referral || null,
             location: message.location || null,
-            contacts: message.contacts || null
+            contacts: message.contacts || null,
+            interactive: message.interactive || null,
+            button: message.button || null,
+            reaction: message.reaction || null
           }
         });
       }
@@ -86,6 +90,7 @@ function textFrom(message) {
   if (message.image?.caption) return message.image.caption;
   if (message.video?.caption) return message.video.caption;
   if (message.document?.caption) return message.document.caption;
+  if (message.reaction?.emoji) return message.reaction.emoji;
   return "";
 }
 

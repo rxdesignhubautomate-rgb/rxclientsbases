@@ -35,6 +35,7 @@ import { MarketingService } from "./services/marketing.service.js";
 import { TemplateRegistryService } from "./services/template-registry.service.js";
 import { SmartMessageService } from "./services/smart-message.service.js";
 import { CampaignWorker } from "./workers/campaign.worker.js";
+import { QuickReplyService } from "./services/quick-reply.service.js";
 
 let singleton;
 
@@ -65,6 +66,7 @@ export function createContainer(overrides = {}) {
   const timeline = new TimelineService(store);
   const dashboard = new DashboardService(store);
   const users = new UserService({ store, audit });
+  const quickReplies = new QuickReplyService({ store, audit });
   const otpMailer = overrides.otpMailer || new OtpMailerService(env);
   const otpAuth = overrides.otpAuth || new OtpAuthService({ store, mailer: otpMailer, env });
   const passwordAuth = overrides.passwordAuth || new PasswordAuthService({ store, auth: firebaseAuth, env });
@@ -201,6 +203,7 @@ export function createContainer(overrides = {}) {
     timeline,
     dashboard,
     users,
+    quickReplies,
     otpAuth,
     passwordAuth,
     utilityTemplates,

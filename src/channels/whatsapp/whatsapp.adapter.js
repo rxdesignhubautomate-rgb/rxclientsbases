@@ -120,11 +120,29 @@ export class WhatsAppMetaAdapter extends BaseChannelAdapter {
 }
 
 function buildMessageBody(message, attachments) {
+  const context = message.metadata?.replyToProviderMessageId
+    ? { context: { message_id: message.metadata.replyToProviderMessageId } }
+    : {};
   if (message.type === "TEMPLATE" && message.metadata?.template) {
-    return { type: "template", template: message.metadata.template };
+    return { ...context, type: "template", template: message.metadata.template };
   }
   if (message.type === "INTERACTIVE" && message.metadata?.interactive) {
-    return { type: "interactive", interactive: message.metadata.interactive };
+    return { ...context, type: "interactive", interactive: message.metadata.interactive };
+  }
+  if (message.type === "LOCATION" && message.metadata?.location) {
+    return { ...context, type: "location", location: message.metadata.location };
+  }
+  if (message.type === "CONTACT" && message.metadata?.contacts) {
+    return { ...context, type: "contacts", contacts: message.metadata.contacts };
+  }
+  if (message.type === "REACTION" && message.metadata?.replyToProviderMessageId && message.text) {
+    return {
+      type: "reaction",
+      reaction: {
+        message_id: message.metadata.replyToProviderMessageId,
+        emoji: message.text
+      }
+    };
   }
   const attachment = attachments[0];
   const mediaTypes = { IMAGE: "image", DOCUMENT: "document", AUDIO: "audio", VIDEO: "video" };
@@ -132,7 +150,7 @@ function buildMessageBody(message, attachments) {
   if (providerType && message.metadata?.providerMedia) {
     const media = { ...message.metadata.providerMedia };
     if (message.text && providerType !== "audio") media.caption = message.text;
-    return { type: providerType, [providerType]: media };
+    return { ...context, type: providerType, [providerType]: media };
   }
   if (providerType && attachment) {
     const media = attachment.providerMediaId
@@ -140,9 +158,9 @@ function buildMessageBody(message, attachments) {
       : { link: attachment.signedUrl };
     if (message.text && providerType !== "audio") media.caption = message.text;
     if (providerType === "document" && attachment.originalFilename) media.filename = attachment.originalFilename;
-    return { type: providerType, [providerType]: media };
+    return { ...context, type: providerType, [providerType]: media };
   }
-  return { type: "text", text: { preview_url: false, body: message.text } };
+  return { ...context, type: "text", text: { preview_url: true, body: message.text } };
 }
 
 async function channelError(response, prefix) {

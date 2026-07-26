@@ -1,4 +1,4 @@
-services:
+bservices:
   - type: web
     name: rx-communication-crm
     runtime: node

@@ -90,6 +90,17 @@ Campaigns support internal submit/approve/schedule/start/pause/resume/cancel ope
 
 Use `POST /api/v1/whatsapp/templates/sync` after deployment. The complete environment list, architecture, routes, curl examples, worker modes, Firestore collections, Meta manual steps, and troubleshooting notes are in [WhatsApp smart messaging](docs/whatsapp-smart-messaging.md).
 
+## Daily WhatsApp workspace
+
+Backend v2.1 and the matching frontend v1.2 add a practical shared inbox on top of the official Cloud API:
+
+- text, images, video, documents, audio/voice notes, locations, contact cards, interactive reply buttons, quoted replies, reactions, and clickable links;
+- delivery/read states, unread counters, incremental polling, desktop alerts, built-in/custom quick replies, and internal notes;
+- client tags and Important status, private notes, team assignment, follow-up scheduling, linked orders, and reviewed Utility updates;
+- an authenticated `/api/v1/whatsapp/capabilities` endpoint that separates features available in this release from Meta account-level setup.
+
+WhatsApp Business App coexistence, WhatsApp calling, Flows, catalog/commerce, payments, and any country/account eligibility remain Meta-side products. The CRM does not claim those are enabled until they are configured and approved in the relevant Meta account. See [WhatsApp Inbox setup](docs/whatsapp-inbox-setup.md).
+
 ## Firebase configuration
 
 Deploy indexes and the server-owned security rules using the Firebase CLI:

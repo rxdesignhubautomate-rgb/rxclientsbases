@@ -3,7 +3,7 @@
 ## Web service
 
 - Runtime: Node
-- Node version: 22
+- Node version: 24
 - Build command: `npm ci`
 - Start command: `npm start`
 - Health check: `/health`

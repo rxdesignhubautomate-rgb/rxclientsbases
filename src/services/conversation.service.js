@@ -104,8 +104,8 @@ export class ConversationService {
       patch.snoozedUntil = input.snoozedUntil;
     }
     if (action === "ASSIGN") {
-      if (!input.assignedTo) throw new ConflictError("assignedTo is required");
-      patch.assignedTo = input.assignedTo;
+      if (!Object.hasOwn(input, "assignedTo")) throw new ConflictError("assignedTo is required");
+      patch.assignedTo = input.assignedTo || null;
     }
     if (action === "HUMAN_TAKEOVER") patch.humanTakeover = input.enabled ?? true;
     if (action === "AI_MODE") {
@@ -114,6 +114,18 @@ export class ConversationService {
     }
     if (Object.keys(patch).length === 1) throw new ConflictError(`Unsupported conversation action: ${action}`);
     await this.store.update(COLLECTIONS.conversations, conversationId, patch);
+    if (action === "ASSIGN") {
+      await this.store.update(COLLECTIONS.contacts, before.contactId, {
+        assignedTo: patch.assignedTo,
+        updatedAt: timestamp
+      });
+      if (before.leadId) {
+        await this.store.update(COLLECTIONS.leads, before.leadId, {
+          assignedTo: patch.assignedTo,
+          updatedAt: timestamp
+        });
+      }
+    }
     const keyId = sha256(`${orgId}:${before.contactId}:${before.currentChannel}:OPEN`);
     if (action === "CLOSE") {
       await this.store.set(COLLECTIONS.openConversationKeys, keyId, { closedAt: timestamp, conversationId, active: false }, { merge: true });
@@ -160,7 +172,10 @@ function contactSummary(contact) {
     contactPerson: contact.contactPerson || "",
     primaryPhone: contact.primaryPhone || "",
     city: contact.city || "",
-    salesPersonName: contact.salesPersonName || ""
+    salesPersonName: contact.salesPersonName || "",
+    assignedTo: contact.assignedTo || null,
+    tags: contact.tags || [],
+    status: contact.status || "ACTIVE"
   };
 }
 

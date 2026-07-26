@@ -16,6 +16,41 @@ export function createControllers(container) {
     return options;
   };
   const checkAssigned = (req, entity) => enforceAssignment(entity)(req);
+  const inboxMessages = async (orgId, result) => {
+    const attachmentIds = [...new Set(result.items.flatMap((item) => item.attachmentIds || []))];
+    const quotedIds = [...new Set(result.items.map((item) => item.replyToMessageId).filter(Boolean))];
+    const [attachmentEntries, quotedMessages] = await Promise.all([
+      Promise.all(attachmentIds.map(async (attachmentId) => {
+        try {
+          return [attachmentId, await c.media.get(orgId, attachmentId, { withSignedUrl: true })];
+        } catch {
+          return [attachmentId, null];
+        }
+      })),
+      c.store.getMany
+        ? c.store.getMany(COLLECTIONS.messages, quotedIds)
+        : Promise.all(quotedIds.map((messageId) => c.store.get(COLLECTIONS.messages, messageId)))
+    ]);
+    const attachmentById = new Map(attachmentEntries);
+    const quotedById = new Map(quotedMessages.filter(Boolean).map((item) => [item.messageId || item.id, item]));
+    return {
+      ...result,
+      items: result.items.map((item) => {
+        const quoted = quotedById.get(item.replyToMessageId);
+        return {
+          ...item,
+          attachments: (item.attachmentIds || []).map((id) => attachmentById.get(id)).filter(Boolean),
+          replyTo: quoted ? {
+            messageId: quoted.messageId || quoted.id,
+            direction: quoted.direction,
+            type: quoted.type,
+            text: quoted.text || "",
+            senderType: quoted.senderType || null
+          } : null
+        };
+      })
+    };
+  };
 
   return {
     contacts: {
@@ -102,7 +137,8 @@ export function createControllers(container) {
       messages: wrap(async (req, res) => {
         const value = await c.conversations.get(org(req), req.params.conversationId);
         checkAssigned(req, value);
-        return sendList(res, await c.messages.list(org(req), req.params.conversationId, listQuery(req.query)));
+        const result = await c.messages.list(org(req), req.params.conversationId, listQuery(req.query));
+        return sendList(res, await inboxMessages(org(req), result));
       }),
       action: (action) => wrap(async (req, res) => {
         const value = await c.conversations.get(org(req), req.params.conversationId);
@@ -151,6 +187,7 @@ export function createControllers(container) {
           textMessage: req.body.text,
           messageType: req.body.type,
           attachmentIds: req.body.attachmentIds,
+          replyToMessageId: req.body.replyToMessageId || null,
           idempotencyKey: req.headers["idempotency-key"],
           metadata: { ...req.body.metadata, replyToMessageId: req.body.replyToMessageId || null }
         }, actor(req));
@@ -176,7 +213,63 @@ export function createControllers(container) {
       markRead: wrap(async (req, res) => sendData(res, await c.messages.markRead(org(req), req.params.messageId, actor(req))))
     },
     whatsapp: {
-      utilityTemplates: wrap(async (_req, res) => sendData(res, c.utilityTemplates.list()))
+      utilityTemplates: wrap(async (_req, res) => sendData(res, c.utilityTemplates.list())),
+      capabilities: wrap(async (req, res) => {
+        let account = null;
+        let accountError = null;
+        try {
+          account = await c.channelAccounts.resolveForSend(org(req), "WHATSAPP", null);
+        } catch (error) {
+          accountError = error.message;
+        }
+        return sendData(res, {
+          connected: Boolean(account),
+          account: account ? {
+            channelAccountId: account.channelAccountId || account.id,
+            displayName: account.displayName,
+            displayNumber: account.displayNumber || "",
+            provider: account.provider,
+            status: account.status,
+            sendEnabled: account.sendEnabled === true,
+            receiveEnabled: account.receiveEnabled === true
+          } : null,
+          accountError,
+          supported: {
+            text: true,
+            images: true,
+            documents: true,
+            audioAndVoiceNotes: true,
+            video: true,
+            location: true,
+            contactCards: true,
+            quotedReplies: true,
+            reactions: true,
+            interactiveButtonsAndLists: true,
+            approvedTemplates: true,
+            flows: true,
+            readReceipts: true,
+            deliveryStatuses: true,
+            multiAgentInbox: true
+          },
+          externalSetup: {
+            coexistence: {
+              status: "META_ONBOARDING_REQUIRED",
+              detail: "Same-number WhatsApp Business App coexistence depends on Meta eligibility and supported onboarding."
+            },
+            calling: {
+              status: "META_ELIGIBILITY_REQUIRED",
+              detail: "WhatsApp Business Calling must be enabled for the business account before CRM call controls can use it."
+            }
+          },
+          unsupported: ["GROUPS", "COMMUNITIES", "PERSONAL_STATUS", "PERSONAL_BROADCAST_LISTS"]
+        });
+      }),
+      listQuickReplies: wrap(async (req, res) => sendList(res, await c.quickReplies.list(org(req), {
+        ...listQuery(req.query),
+        includeInactive: req.query.includeInactive === "true"
+      }))),
+      createQuickReply: wrap(async (req, res) => sendData(res, await c.quickReplies.create(org(req), req.body, actor(req)), 201)),
+      updateQuickReply: wrap(async (req, res) => sendData(res, await c.quickReplies.update(org(req), req.params.quickReplyId, req.body, actor(req))))
     },
     marketing: {
       templates: wrap(async (_req, res) => sendData(res, c.marketing.listTemplates())),
@@ -264,7 +357,7 @@ export function createControllers(container) {
     system: {
       info: wrap(async (req, res) => sendData(res, {
         service: "rx-communication-crm",
-        version: "2.0.0",
+        version: "2.1.0",
         orgId: org(req),
         features: {
           legacyDualWrite: c.env.ENABLE_LEGACY_DUAL_WRITE,

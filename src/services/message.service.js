@@ -89,6 +89,17 @@ export class MessageService {
       (item) => item.channel === conversation.currentChannel && item.active === true
     );
     if (!identity) throw new ConflictError("Contact has no active identity for the conversation channel");
+    let replyToProviderMessageId = null;
+    if (replyToMessageId) {
+      const referenced = await this.get(orgId, replyToMessageId);
+      if (referenced.conversationId !== conversationId) {
+        throw new ConflictError("Quoted message does not belong to this conversation");
+      }
+      if (!referenced.providerMessageId) {
+        throw new ConflictError("Quoted message is not available on WhatsApp yet");
+      }
+      replyToProviderMessageId = referenced.providerMessageId;
+    }
     const messageId = createId("message");
     const outboxId = createId("outbox");
     const timestamp = now();
@@ -113,7 +124,10 @@ export class MessageService {
       status: "QUEUED",
       errorCode: null,
       errorMessage: null,
-      metadata,
+      metadata: {
+        ...metadata,
+        ...(replyToProviderMessageId ? { replyToProviderMessageId } : {})
+      },
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -218,6 +232,15 @@ export class MessageService {
     const message = await this.store.get(COLLECTIONS.messages, messageId);
     if (!message || message.orgId !== orgId) throw new NotFoundError("Message");
     return message;
+  }
+
+  async findByProviderId(orgId, providerMessageId) {
+    if (!providerMessageId) return null;
+    const result = await this.store.find(COLLECTIONS.messages, {
+      filters: [["orgId", "==", orgId], ["providerMessageId", "==", providerMessageId]],
+      limit: 2
+    });
+    return result.items[0] || null;
   }
 
   list(orgId, conversationId, options = {}) {

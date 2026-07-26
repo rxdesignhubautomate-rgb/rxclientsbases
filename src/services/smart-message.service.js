@@ -82,6 +82,7 @@ export class SmartMessageService {
         text: prepared.text,
         type: prepared.type,
         attachmentIds: input.attachmentIds || [],
+        replyToMessageId: input.replyToMessageId || input.metadata?.replyToMessageId || null,
         metadata: {
           ...(input.metadata || {}),
           ...prepared.metadata,
@@ -249,8 +250,16 @@ export class SmartMessageService {
         if (template?.category === "UTILITY") text = this.utilityTemplates.prepare(input.templateKey, templateData).text;
         if (template?.category === "MARKETING") text = this.marketingTemplates.prepare(input.templateKey, templateData).text;
       }
-      if (!text && !(input.attachmentIds || []).length) throw new ConflictError("textMessage or an attachment is required");
-      return { text, type: input.messageType || "TEXT", metadata: input.messageMetadata || {} };
+      const structured = ["LOCATION", "CONTACT", "INTERACTIVE", "REACTION"].includes(input.messageType)
+        && (input.metadata || input.messageMetadata);
+      if (!text && !(input.attachmentIds || []).length && !structured) {
+        throw new ConflictError("textMessage, an attachment, or a structured message payload is required");
+      }
+      return {
+        text,
+        type: input.messageType || "TEXT",
+        metadata: input.messageMetadata || input.metadata || {}
+      };
     }
     if (decision.mode === MESSAGE_MODES.UTILITY) return this.utilityTemplates.prepare(decision.templateKey, templateData);
     if (decision.mode === MESSAGE_MODES.MARKETING) return this.marketingTemplates.prepare(decision.templateKey, templateData);

@@ -10,6 +10,8 @@ const SALES_PERMISSIONS = [
   "conversations.read_assigned",
   "conversations.update",
   "messages.send",
+  "attachments.read",
+  "attachments.write",
   "followups.read",
   "followups.write",
   "leads.read_assigned",

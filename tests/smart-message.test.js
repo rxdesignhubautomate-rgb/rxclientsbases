@@ -54,6 +54,31 @@ describe("audited smart send", () => {
     expect((await core.store.find("outbox", { limit: 10 })).items).toHaveLength(0);
   });
 
+  it("preserves structured WhatsApp payloads through the policy layer", async () => {
+    const core = makeCore();
+    const seeded = await seedConversation(core);
+    const smart = makeSmart(core);
+    const location = { latitude: 28.6139, longitude: 77.209, name: "RX Design Hub" };
+    const result = await smart.smartSend("RXDH", {
+      contactId: seeded.contact.contactId,
+      conversationId: seeded.conversation.conversationId,
+      eventType: "CUSTOMER_REQUEST",
+      requestedByCustomer: true,
+      messageType: "LOCATION",
+      metadata: { location },
+      idempotencyKey: "CUSTOMER_LOCATION_1"
+    }, { userId: "USR_ADMIN" });
+    expect(result).toMatchObject({ queued: true, mode: "SERVICE_MESSAGE" });
+    const messages = await core.store.find("messages", {
+      filters: [["direction", "==", "OUTBOUND"]],
+      limit: 10
+    });
+    expect(messages.items[0]).toMatchObject({
+      type: "LOCATION",
+      metadata: { location }
+    });
+  });
+
   it("enforces the marketing frequency limit across different campaign jobs", async () => {
     const core = makeCore();
     const seeded = await seedConversation(core);

@@ -56,7 +56,7 @@ export const channelAccountSchema = z.object({
 });
 
 export const conversationActionSchema = z.object({
-  assignedTo: id.optional(),
+  assignedTo: id.nullable().optional(),
   aiMode: z.enum(AI_MODES).optional(),
   status: z.enum(CONVERSATION_STATUSES).optional(),
   snoozedUntil: z.coerce.date().optional(),
@@ -138,7 +138,7 @@ export const smartMessageSchema = z.object({
   templateKey: z.string().trim().min(2).max(100).optional(),
   templateData: z.record(z.unknown()).optional().default({}),
   textMessage: z.string().trim().max(4096).optional(),
-  messageType: z.enum(["TEXT", "IMAGE", "DOCUMENT", "AUDIO", "VIDEO", "INTERACTIVE"]).optional().default("TEXT"),
+  messageType: z.enum(["TEXT", "IMAGE", "DOCUMENT", "AUDIO", "VIDEO", "LOCATION", "CONTACT", "INTERACTIVE", "REACTION"]).optional().default("TEXT"),
   attachmentIds: z.array(id).max(20).optional().default([]),
   metadata: z.record(z.unknown()).optional().default({}),
   idempotencyKey: z.string().trim().min(4).max(250).optional()
@@ -202,8 +202,29 @@ export const outboundMessageSchema = z.object({
     if (!value.utilityTemplateId) context.addIssue({ code: z.ZodIssueCode.custom, message: "Utility template is required", path: ["utilityTemplateId"] });
     return;
   }
-  if (!value.text && !value.attachmentIds.length) context.addIssue({ code: z.ZodIssueCode.custom, message: "Text or attachment is required" });
+  const structuredPayload = (
+    (value.type === "LOCATION" && value.metadata?.location)
+    || (value.type === "CONTACT" && value.metadata?.contacts)
+    || (value.type === "INTERACTIVE" && value.metadata?.interactive)
+    || (value.type === "REACTION" && value.replyToMessageId && value.text)
+  );
+  if (!value.text && !value.attachmentIds.length && !structuredPayload) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Text, attachment, or structured message payload is required" });
+  }
 });
+
+export const quickReplyCreateSchema = z.object({
+  shortcut: z.string().trim().min(2).max(40).regex(/^\/[a-z0-9_-]+$/i, "Shortcut must look like /price"),
+  title: z.string().trim().min(2).max(80),
+  text: z.string().trim().min(1).max(4096),
+  category: z.enum(["GENERAL", "SALES", "SUPPORT", "ORDER", "PAYMENT"]).optional().default("GENERAL"),
+  active: z.boolean().optional().default(true)
+}).strict();
+
+export const quickReplyUpdateSchema = quickReplyCreateSchema.partial().strict().refine(
+  (value) => Object.keys(value).length > 0,
+  { message: "At least one quick-reply field is required" }
+);
 
 export const leadSchema = z.object({
   contactId: id,

@@ -94,4 +94,31 @@ describe("durable WhatsApp webhook", () => {
     await service.processEvent(event.webhookEventId);
     expect(media.downloadAndStore).toHaveBeenCalledWith(expect.objectContaining({ media: expect.objectContaining({ providerMediaId: "media-1" }) }));
   });
+
+  it("links an inbound quoted reply to the original CRM message", async () => {
+    const { core, service } = await setup();
+    const firstBody = payload("wamid.original");
+    const firstEvent = await service.receiveWhatsApp({
+      rawBody: Buffer.from(JSON.stringify(firstBody)),
+      payload: firstBody,
+      signature: "test"
+    });
+    await service.processEvent(firstEvent.webhookEventId);
+
+    const replyBody = payload("wamid.reply");
+    replyBody.entry[0].changes[0].value.messages[0].context = { id: "wamid.original" };
+    const replyEvent = await service.receiveWhatsApp({
+      rawBody: Buffer.from(JSON.stringify(replyBody)),
+      payload: replyBody,
+      signature: "test"
+    });
+    await service.processEvent(replyEvent.webhookEventId);
+
+    const messages = (await core.store.find(COLLECTIONS.messages, {
+      filters: [["orgId", "==", "RXDH"]],
+      orderBy: ["createdAt", "asc"],
+      limit: 10
+    })).items;
+    expect(messages[1].replyToMessageId).toBe(messages[0].messageId);
+  });
 });
