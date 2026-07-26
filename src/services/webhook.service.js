@@ -139,7 +139,14 @@ export class WebhookService {
         providerTimestamp: event.providerTimestamp,
         senderId: event.externalUserId,
         replyToMessageId: quotedMessage?.messageId || quotedMessage?.id || null,
-        metadata: event.metadata
+        metadata: {
+          ...event.metadata,
+          ...(event.media ? {
+            providerMedia: event.media,
+            mediaArchiveStatus: "PENDING",
+            mediaArchiveError: null
+          } : {})
+        }
       });
       if (!saved.duplicate) {
         const receivedAt = now();
@@ -191,6 +198,12 @@ export class WebhookService {
             media: event.media
           });
         } catch (error) {
+          await this.media.markMessageMediaState(
+            this.orgId,
+            saved.message.messageId,
+            "RETRY",
+            error.message
+          ).catch(() => {});
           const automationJobId = createId("automationJob");
           await this.store.create(COLLECTIONS.automationJobs, automationJobId, {
             automationJobId,

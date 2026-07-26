@@ -2,16 +2,23 @@ import { COLLECTIONS } from "../config/constants.js";
 import { createId } from "../utils/ids.js";
 import { sha256 } from "../utils/hashing.js";
 import { now } from "../utils/dates.js";
-import { NotFoundError } from "../utils/errors.js";
+import { ConflictError, NotFoundError } from "../utils/errors.js";
 
 export class MediaService {
-  constructor({ store, bucket, channelManager }) {
+  constructor({ store, bucket, channelManager, channelAccounts = null }) {
     this.store = store;
     this.bucket = bucket;
     this.channelManager = channelManager;
+    this.channelAccounts = channelAccounts;
   }
 
   async downloadAndStore({ orgId, account, contactId, conversationId, messageId, media }) {
+    if (messageId) {
+      const existingMessage = await this.store.get(COLLECTIONS.messages, messageId);
+      if (existingMessage?.orgId === orgId && existingMessage.attachmentIds?.length) {
+        return this.get(orgId, existingMessage.attachmentIds[0]);
+      }
+    }
     const downloaded = await this.channelManager.downloadMedia({ account, media });
     return this.storeBuffer({
       orgId,
@@ -56,12 +63,86 @@ export class MediaService {
     await this.store.create(COLLECTIONS.attachments, attachmentId, attachment);
     if (input.messageId) {
       const message = await this.store.get(COLLECTIONS.messages, input.messageId);
+      const timestamp = now();
       await this.store.update(COLLECTIONS.messages, input.messageId, {
         attachmentIds: [...new Set([...(message?.attachmentIds || []), attachmentId])],
-        updatedAt: now()
+        metadata: {
+          ...(message?.metadata || {}),
+          mediaArchiveStatus: "READY",
+          mediaArchiveError: null
+        },
+        updatedAt: timestamp
       });
+      const conversationId = input.conversationId || message?.conversationId;
+      if (conversationId) {
+        await this.store.update(COLLECTIONS.conversations, conversationId, {
+          mediaUpdatedAt: timestamp,
+          updatedAt: timestamp
+        });
+      }
     }
     return attachment;
+  }
+
+  async markMessageMediaState(orgId, messageId, status, error = null) {
+    const message = await this.store.get(COLLECTIONS.messages, messageId);
+    if (!message || message.orgId !== orgId) throw new NotFoundError("Message");
+    const timestamp = now();
+    await this.store.update(COLLECTIONS.messages, messageId, {
+      metadata: {
+        ...(message.metadata || {}),
+        mediaArchiveStatus: status,
+        mediaArchiveError: error ? String(error).slice(0, 300) : null
+      },
+      updatedAt: timestamp
+    });
+    if (message.conversationId) {
+      await this.store.update(COLLECTIONS.conversations, message.conversationId, {
+        mediaUpdatedAt: timestamp,
+        updatedAt: timestamp
+      });
+    }
+  }
+
+  async retryInboundMedia(orgId, messageId) {
+    const message = await this.store.get(COLLECTIONS.messages, messageId);
+    if (!message || message.orgId !== orgId) throw new NotFoundError("Message");
+    if (message.attachmentIds?.length) {
+      return this.get(orgId, message.attachmentIds[0], { withSignedUrl: true });
+    }
+    if (message.direction !== "INBOUND" || !["IMAGE", "VIDEO", "AUDIO", "DOCUMENT"].includes(message.type)) {
+      throw new ConflictError("This message does not contain recoverable inbound media");
+    }
+
+    let media = message.metadata?.providerMedia || null;
+    if (!media) {
+      const jobs = await this.store.find(COLLECTIONS.automationJobs, {
+        filters: [["orgId", "==", orgId], ["type", "==", "MEDIA_DOWNLOAD"]],
+        limit: 250
+      });
+      media = jobs.items.find((job) => job.payload?.messageId === messageId)?.payload?.media || null;
+    }
+    if (!media?.providerMediaId) {
+      throw new ConflictError("The original WhatsApp media reference is unavailable");
+    }
+    if (!this.channelAccounts) throw new ConflictError("Media recovery is not configured");
+
+    const account = await this.channelAccounts.get(orgId, message.channelAccountId);
+    await this.markMessageMediaState(orgId, messageId, "DOWNLOADING");
+    try {
+      const attachment = await this.downloadAndStore({
+        orgId,
+        account,
+        contactId: message.contactId,
+        conversationId: message.conversationId,
+        messageId,
+        media
+      });
+      return this.get(orgId, attachment.attachmentId, { withSignedUrl: true });
+    } catch (error) {
+      await this.markMessageMediaState(orgId, messageId, "FAILED", error.message);
+      throw error;
+    }
   }
 
   async get(orgId, attachmentId, { withSignedUrl = false } = {}) {
@@ -73,6 +154,12 @@ export class MediaService {
       expires: Date.now() + 15 * 60 * 1000
     });
     return { ...attachment, signedUrl };
+  }
+
+  async getContent(orgId, attachmentId) {
+    const attachment = await this.get(orgId, attachmentId);
+    const [buffer] = await this.bucket.file(attachment.storagePath).download();
+    return { attachment, buffer };
   }
 
   async prepareForSend(orgId, attachmentIds = []) {

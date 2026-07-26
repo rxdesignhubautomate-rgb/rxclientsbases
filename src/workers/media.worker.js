@@ -50,12 +50,23 @@ export class MediaWorker {
     });
     if (!claimed) return;
     try {
+      await this.media.markMessageMediaState(claimed.orgId, claimed.payload.messageId, "DOWNLOADING")
+        .catch((error) => this.logger.warn({ error: error.message, messageId: claimed.payload.messageId }, "media_state_update_failed"));
       const account = await this.channelAccounts.get(claimed.orgId, claimed.payload.channelAccountId);
       await this.media.downloadAndStore({ orgId: claimed.orgId, account, ...claimed.payload });
       await this.store.update(COLLECTIONS.automationJobs, id, { status: "COMPLETED", completedAt: now(), lockedAt: null, lockedBy: null, updatedAt: now() });
     } catch (error) {
       const final = claimed.attemptCount >= this.maxAttempts;
       const details = { name: error.name || "Error", message: String(error.message || error).slice(0, 500) };
+      await this.media.markMessageMediaState(
+        claimed.orgId,
+        claimed.payload.messageId,
+        final ? "FAILED" : "RETRY",
+        details.message
+      ).catch((stateError) => this.logger.warn({
+        error: stateError.message,
+        messageId: claimed.payload.messageId
+      }, "media_state_update_failed"));
       await this.store.update(COLLECTIONS.automationJobs, id, {
         status: final ? "FAILED" : "RETRY",
         nextAttemptAt: new Date(Date.now() + Math.min(60_000 * 5 ** (claimed.attemptCount - 1), 7_200_000)),

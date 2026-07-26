@@ -111,7 +111,12 @@ export function createContainer(overrides = {}) {
       maxRetries: env.CAMPAIGN_MAX_RETRIES
     }
   });
-  const media = new MediaService({ store, bucket: overrides.bucket || firebase.bucket, channelManager });
+  const media = new MediaService({
+    store,
+    bucket: overrides.bucket || firebase.bucket,
+    channelManager,
+    channelAccounts
+  });
   const ai = new AiService({
     apiKey: env.OPENAI_API_KEY,
     model: env.OPENAI_MODEL,

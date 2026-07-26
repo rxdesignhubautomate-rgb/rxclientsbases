@@ -93,11 +93,12 @@ Use `POST /api/v1/whatsapp/templates/sync` after deployment. The complete enviro
 
 ## Daily WhatsApp workspace
 
-Backend v2.1 and the matching frontend v1.2 add a practical shared inbox on top of the official Cloud API:
+Backend v2.2 and the matching frontend v1.3 add a practical shared inbox on top of the official Cloud API:
 
 - text, images, video, documents, audio/voice notes, locations, contact cards, interactive reply buttons, quoted replies, reactions, and clickable links;
 - delivery/read states, unread counters, incremental polling, desktop alerts, built-in/custom quick replies, and internal notes;
 - client tags and Important status, private notes, team assignment, follow-up scheduling, linked orders, and reviewed Utility updates;
+- inline image/video/audio previews, authenticated file open/download, and manual recovery for failed inbound media archives;
 - an authenticated `/api/v1/whatsapp/capabilities` endpoint that separates features available in this release from Meta account-level setup.
 
 WhatsApp Business App coexistence, WhatsApp calling, Flows, catalog/commerce, payments, and any country/account eligibility remain Meta-side products. The CRM does not claim those are enabled until they are configured and approved in the relevant Meta account. See [WhatsApp Inbox setup](docs/whatsapp-inbox-setup.md).

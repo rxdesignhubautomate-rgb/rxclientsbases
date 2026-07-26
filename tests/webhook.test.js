@@ -88,11 +88,16 @@ describe("durable WhatsApp webhook", () => {
   });
 
   it("archives media without delaying initial receipt persistence", async () => {
-    const { service, media } = await setup();
+    const { core, service, media } = await setup();
     const body = payload("wamid.media", "image");
     const event = await service.receiveWhatsApp({ rawBody: Buffer.from(JSON.stringify(body)), payload: body, signature: "test" });
     await service.processEvent(event.webhookEventId);
     expect(media.downloadAndStore).toHaveBeenCalledWith(expect.objectContaining({ media: expect.objectContaining({ providerMediaId: "media-1" }) }));
+    const messages = await core.store.find(COLLECTIONS.messages, { filters: [["orgId", "==", "RXDH"]], limit: 10 });
+    expect(messages.items[0].metadata).toMatchObject({
+      mediaArchiveStatus: "PENDING",
+      providerMedia: { providerMediaId: "media-1", mimeType: "image/jpeg" }
+    });
   });
 
   it("links an inbound quoted reply to the original CRM message", async () => {

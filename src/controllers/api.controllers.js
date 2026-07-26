@@ -228,6 +228,11 @@ export function createControllers(container) {
         checkAssigned(req, await c.conversations.get(org(req), message.conversationId));
         return sendData(res, await c.messages.retry(org(req), req.params.messageId, actor(req)), 202);
       }),
+      retryMedia: wrap(async (req, res) => {
+        const message = await c.messages.get(org(req), req.params.messageId);
+        checkAssigned(req, await c.conversations.get(org(req), message.conversationId));
+        return sendData(res, await c.media.retryInboundMedia(org(req), req.params.messageId), 200);
+      }),
       markRead: wrap(async (req, res) => sendData(res, await c.messages.markRead(org(req), req.params.messageId, actor(req))))
     },
     whatsapp: {
@@ -372,7 +377,25 @@ export function createControllers(container) {
       update: wrap(async (req, res) => sendData(res, await c.users.update(org(req), req.params.userId, req.body, actor(req))))
     },
     attachments: {
-      get: wrap(async (req, res) => sendData(res, await c.media.get(org(req), req.params.attachmentId, { withSignedUrl: true }))),
+      get: wrap(async (req, res) => {
+        const attachment = await c.media.get(org(req), req.params.attachmentId, { withSignedUrl: true });
+        checkAssigned(req, await c.contacts.get(org(req), attachment.contactId));
+        return sendData(res, attachment);
+      }),
+      content: wrap(async (req, res) => {
+        const { attachment, buffer } = await c.media.getContent(org(req), req.params.attachmentId);
+        checkAssigned(req, await c.contacts.get(org(req), attachment.contactId));
+        const filename = safeDownloadName(attachment.originalFilename || attachment.attachmentId);
+        const disposition = req.query.download === "true" ? "attachment" : "inline";
+        res.set({
+          "Content-Type": attachment.mimeType || "application/octet-stream",
+          "Content-Length": String(buffer.length),
+          "Content-Disposition": `${disposition}; filename="${filename.ascii}"; filename*=UTF-8''${filename.encoded}`,
+          "Cache-Control": "private, max-age=300",
+          "X-Content-Type-Options": "nosniff"
+        });
+        return res.send(buffer);
+      }),
       upload: wrap(async (req, res) => {
         const contact = await c.contacts.get(org(req), req.query.contactId);
         checkAssigned(req, contact);
@@ -383,7 +406,7 @@ export function createControllers(container) {
           messageId: null,
           buffer: req.body,
           mimeType: req.headers["content-type"],
-          originalFilename: req.headers["x-filename"] || "upload.bin"
+          originalFilename: decodeUploadName(req.headers["x-filename"])
         });
         return sendData(res, attachment, 201);
       })
@@ -395,7 +418,7 @@ export function createControllers(container) {
     system: {
       info: wrap(async (req, res) => sendData(res, {
         service: "rx-communication-crm",
-        version: "2.1.2",
+        version: "2.2.0",
         orgId: org(req),
         features: {
           legacyDualWrite: c.env.ENABLE_LEGACY_DUAL_WRITE,
@@ -443,4 +466,21 @@ function resourceController(container, resource, scopedOptions, checkAssigned) {
 
 function wrap(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
+function safeDownloadName(value) {
+  const original = String(value || "attachment.bin").slice(0, 240);
+  return {
+    ascii: original.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_"),
+    encoded: encodeURIComponent(original)
+  };
+}
+
+function decodeUploadName(value) {
+  const encoded = String(value || "upload.bin");
+  try {
+    return decodeURIComponent(encoded).slice(0, 240);
+  } catch {
+    return encoded.slice(0, 240);
+  }
 }
