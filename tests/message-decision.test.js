@@ -22,6 +22,17 @@ describe("WhatsApp message decision policy", () => {
     })).toMatchObject({ mode: "UTILITY_TEMPLATE", templateKey: "QUOTATION_READY" });
   });
 
+  it("keeps an explicitly selected Utility template inside the service window", () => {
+    expect(decision({
+      lead: { lastUserMessageAt: new Date(current.getTime() - 2 * 60 * 60 * 1000) },
+      eventType: "ORDER_READY",
+      orderId: "ORD_REAL",
+      transactionVerified: true,
+      requestedMode: "UTILITY_TEMPLATE",
+      templateKey: "order_confirmation"
+    })).toMatchObject({ mode: "UTILITY_TEMPLATE", templateKey: "order_confirmation" });
+  });
+
   it("selects Marketing for an opted-in discount outside 24 hours", () => {
     expect(decision({
       lead: { lastUserMessageAt: new Date(current.getTime() - 25 * 60 * 60 * 1000), marketingOptIn: true },

@@ -31,6 +31,7 @@ const schema = z.object({
   META_GRAPH_API_VERSION: z.string().regex(/^v\d+\.\d+$/).default("v25.0"),
   META_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(15000),
   WHATSAPP_TEMPLATE_OVERRIDES_JSON: z.string().default("{}"),
+  AUTO_CONFIGURE_WHATSAPP_CHANNEL_ACCOUNT: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
   ADMIN_API_KEY: z.string().min(24).optional(),
   DEFAULT_CHANNEL_ACCOUNT_ID: z.string().default("WA_RX_01"),
   OPENAI_API_KEY: z.string().optional(),

@@ -24,6 +24,7 @@ export class UtilityTemplateService {
         description: template.body,
         body: template.body,
         category: template.category,
+        languageCode: template.language,
         eventType: template.eventType || template.key,
         variables: template.variables
       }));

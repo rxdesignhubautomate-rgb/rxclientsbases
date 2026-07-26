@@ -61,6 +61,15 @@ export function decideMessageType(input = {}) {
   const utilityRequirements = UTILITY_EVENT_REQUIREMENTS[input.eventType];
   const isUtilityEvent = Boolean(utilityRequirements);
 
+  if (input.requestedMode === MESSAGE_MODES.UTILITY && isUtilityEvent) {
+    const missing = utilityRequirements.filter((field) => !requiredValue(input, field));
+    if (missing.length) return blocked(`MISSING_TRANSACTION_DATA:${missing.join(",")}`, base);
+    if (input.transactionVerified !== true) return blocked("TRANSACTION_RECORD_NOT_VERIFIED", base);
+    const templateKey = utilityTemplateKey(input.templateKey, input.eventType);
+    if (!templateKey) return blocked("UTILITY_TEMPLATE_REQUIRED", base);
+    return allowed(MESSAGE_MODES.UTILITY, "An agent explicitly selected a verified Utility template", base, templateKey, true);
+  }
+
   if (serviceWindow.open || freeEntryWindow.open) {
     return allowed(MESSAGE_MODES.SERVICE, "A recorded customer-service or free-entry window is open", base, null, false);
   }

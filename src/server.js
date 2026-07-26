@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { createApp } from "./app.js";
 import { assertStartupEnv, env } from "./config/env.js";
 import { logger } from "./config/logger.js";
+import { ensureWhatsAppChannelAccount } from "./bootstrap/whatsapp-channel-account.js";
 import { startDigestScheduler } from "../services/dailyDigest.js";
 import { startSequenceScheduler } from "../services/sequenceScheduler.js";
 
@@ -9,6 +10,18 @@ assertStartupEnv();
 const app = createApp();
 const container = app.locals.container;
 const server = createServer(app);
+
+if (env.AUTO_CONFIGURE_WHATSAPP_CHANNEL_ACCOUNT) {
+  try {
+    const result = await ensureWhatsAppChannelAccount(container);
+    logger.info({
+      channelAccountId: result.account.channelAccountId || result.account.id,
+      changed: result.changed
+    }, "whatsapp_channel_account_ready");
+  } catch (error) {
+    logger.error({ error: error.message }, "whatsapp_channel_account_auto_configuration_failed");
+  }
+}
 
 server.listen(env.PORT, () => {
   logger.info({ port: env.PORT, nodeEnv: env.NODE_ENV }, "server_started");

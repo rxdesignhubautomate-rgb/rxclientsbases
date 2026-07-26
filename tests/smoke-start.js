@@ -17,6 +17,7 @@ Object.assign(process.env, {
   META_PHONE_NUMBER_ID: "smoke-phone",
   META_WHATSAPP_BUSINESS_ACCOUNT_ID: "smoke-waba",
   OPENAI_API_KEY: "smoke-openai",
+  AUTO_CONFIGURE_WHATSAPP_CHANNEL_ACCOUNT: "false",
   WORKERS_ENABLED: "false",
   LEGACY_JOBS_ENABLED: "false"
 });

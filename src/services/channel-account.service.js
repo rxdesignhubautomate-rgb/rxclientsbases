@@ -121,6 +121,55 @@ export class ChannelAccountService {
     if (!account) throw new ConflictError(`No active default ${channel} account is available`);
     return account;
   }
+
+  async ensureConfiguredDefault(orgId, input, actor = {}) {
+    try {
+      return { account: await this.resolveForSend(orgId, input.channel, null), changed: false };
+    } catch (error) {
+      if (error.code !== "CONFLICT") throw error;
+      // Repair a missing or disabled default from trusted server-side configuration.
+    }
+
+    const existing = await this.store.get(COLLECTIONS.channelAccounts, input.channelAccountId);
+    if (existing?.orgId && existing.orgId !== orgId) {
+      throw new ConflictError("Configured channel account ID belongs to another organization");
+    }
+
+    const timestamp = now();
+    const account = {
+      ...pick(input, PUBLIC_FIELDS),
+      orgId,
+      createdAt: existing?.createdAt || timestamp,
+      updatedAt: timestamp,
+      isDefault: true
+    };
+    await this.store.set(COLLECTIONS.channelAccounts, input.channelAccountId, account, { merge: true });
+
+    const accounts = await this.store.find(COLLECTIONS.channelAccounts, {
+      filters: [["orgId", "==", orgId], ["channel", "==", input.channel]],
+      limit: 100
+    });
+    await this.store.runTransaction(async (tx) => {
+      for (const candidate of accounts.items) {
+        const candidateId = candidate.channelAccountId || candidate.id;
+        tx.update(COLLECTIONS.channelAccounts, candidateId, {
+          isDefault: candidateId === input.channelAccountId,
+          updatedAt: timestamp
+        });
+      }
+    });
+
+    const configured = await this.get(orgId, input.channelAccountId);
+    await this.audit.write(auditInput(
+      actor,
+      orgId,
+      "CHANNEL_ACCOUNT_AUTO_CONFIGURED",
+      input.channelAccountId,
+      existing || {},
+      configured
+    ));
+    return { account: configured, changed: true };
+  }
 }
 
 function pick(value, fields) {

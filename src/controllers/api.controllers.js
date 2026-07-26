@@ -4,6 +4,7 @@ import { enforceAssignment } from "../middleware/authorize.js";
 import { COLLECTIONS } from "../config/constants.js";
 import { now } from "../utils/dates.js";
 import { ConflictError } from "../utils/errors.js";
+import { ensureWhatsAppChannelAccount } from "../bootstrap/whatsapp-channel-account.js";
 
 export function createControllers(container) {
   const c = container;
@@ -16,6 +17,21 @@ export function createControllers(container) {
     return options;
   };
   const checkAssigned = (req, entity) => enforceAssignment(entity)(req);
+  const resolveOrderReference = async (orgId, contactId, values = {}) => {
+    if (values.order_id) return values.order_id;
+    const reference = String(values.order_reference || "").trim();
+    if (!reference) return undefined;
+    const result = await c.store.find(COLLECTIONS.orders, {
+      filters: [["orgId", "==", orgId], ["contactId", "==", contactId]],
+      limit: 250
+    });
+    const order = result.items.find((item) => (
+      item.orderId === reference
+      || item.orderNumber === reference
+      || `ORD-${String(item.orderId || "").slice(-8).toUpperCase()}` === reference
+    ));
+    return order?.orderId || reference;
+  };
   const inboxMessages = async (orgId, result) => {
     const attachmentIds = [...new Set(result.items.flatMap((item) => item.attachmentIds || []))];
     const quotedIds = [...new Set(result.items.map((item) => item.replyToMessageId).filter(Boolean))];
@@ -154,6 +170,7 @@ export function createControllers(container) {
         if (req.body.type === "TEMPLATE") {
           const template = c.templateRegistry.resolve(req.body.utilityTemplateId, "UTILITY");
           const values = req.body.templateVariables || {};
+          const orderId = await resolveOrderReference(org(req), conversation.contactId, values);
           const result = await c.smartMessages.smartSend(org(req), {
             contactId: conversation.contactId,
             conversationId: conversation.conversationId,
@@ -161,7 +178,8 @@ export function createControllers(container) {
             messageIntent: "Transactional customer update",
             isPromotional: false,
             requestedByCustomer: true,
-            orderId: values.order_id || values.order_reference,
+            requestedMode: "UTILITY_TEMPLATE",
+            orderId,
             quotationId: values.quotation_id,
             trackingDetails: values.tracking_details || values.tracking_reference,
             templateKey: req.body.utilityTemplateId,
@@ -213,7 +231,18 @@ export function createControllers(container) {
       markRead: wrap(async (req, res) => sendData(res, await c.messages.markRead(org(req), req.params.messageId, actor(req))))
     },
     whatsapp: {
-      utilityTemplates: wrap(async (_req, res) => sendData(res, c.utilityTemplates.list())),
+      utilityTemplates: wrap(async (req, res) => {
+        const templates = await Promise.all(c.utilityTemplates.list().map(async (template) => {
+          const registry = await c.templateRegistry.getStatus(org(req), template.name, template.languageCode);
+          return {
+            ...template,
+            approvalStatus: registry?.status || "NOT_SYNCED",
+            approved: registry?.status === "APPROVED",
+            rejectedReason: registry?.rejectedReason || null
+          };
+        }));
+        return sendData(res, templates);
+      }),
       capabilities: wrap(async (req, res) => {
         let account = null;
         let accountError = null;
@@ -221,6 +250,15 @@ export function createControllers(container) {
           account = await c.channelAccounts.resolveForSend(org(req), "WHATSAPP", null);
         } catch (error) {
           accountError = error.message;
+          if (c.env.AUTO_CONFIGURE_WHATSAPP_CHANNEL_ACCOUNT && org(req) === c.env.ORG_ID) {
+            try {
+              const result = await ensureWhatsAppChannelAccount(c, actor(req));
+              account = result.account;
+              accountError = null;
+            } catch (configurationError) {
+              accountError = configurationError.message;
+            }
+          }
         }
         return sendData(res, {
           connected: Boolean(account),
@@ -357,7 +395,7 @@ export function createControllers(container) {
     system: {
       info: wrap(async (req, res) => sendData(res, {
         service: "rx-communication-crm",
-        version: "2.1.0",
+        version: "2.1.2",
         orgId: org(req),
         features: {
           legacyDualWrite: c.env.ENABLE_LEGACY_DUAL_WRITE,

@@ -34,6 +34,7 @@ Operational switches:
 - `AI_DEFAULT_MODE=ASSIST`: drafts only by default.
 - `AI_AUTO_SEND_ENABLED=false`: disables automatic AI sending globally even for `AUTO` conversations.
 - `WORKERS_ENABLED=true`: runs durable inbound, outbound, and media pollers in the web process. The production-safe defaults poll inbound/outbound every 15 seconds and media every 60 seconds; quota errors automatically pause each affected worker for 15 minutes.
+- `AUTO_CONFIGURE_WHATSAPP_CHANNEL_ACCOUNT=true`: safely creates or repairs the missing active/default WhatsApp channel record from the Render Meta environment values. An already working default account is preserved.
 
 ## Run and verify
 
