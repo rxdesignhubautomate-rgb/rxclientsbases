@@ -77,7 +77,7 @@ export const marketingConsentSchema = z.object({
 export const marketingAudienceSchema = z.object({
   name: z.string().trim().min(2).max(120),
   description: z.string().trim().max(1000).optional().default(""),
-  contactIds: z.array(id).min(1).max(500)
+  contactIds: z.array(id).min(1).max(10000)
 });
 
 export const marketingCampaignSchema = z.object({
@@ -94,6 +94,99 @@ export const marketingCampaignSchema = z.object({
 export const marketingLaunchSchema = z.object({
   startAt: z.coerce.date().optional()
 });
+
+export const marketingProspectUpdateSchema = z.object({
+  important: z.boolean().optional(),
+  assignedTo: id.nullable().optional(),
+  repeatMarketing: z.boolean().optional()
+}).strict().refine(
+  (value) => Object.values(value).some((item) => item !== undefined),
+  { message: "Select at least one replied-customer setting to update" }
+);
+
+const messageEventType = z.enum([
+  "QUOTATION_READY",
+  "DESIGN_PROOF_READY",
+  "DESIGN_APPROVAL_PENDING",
+  "PAYMENT_RECEIVED",
+  "PAYMENT_DUE",
+  "PRINTING_STARTED",
+  "BINDING_STARTED",
+  "ORDER_READY",
+  "ORDER_DISPATCHED",
+  "TRACKING_UPDATED",
+  "DELIVERY_UPDATED",
+  "ORDER_CANCELLED",
+  "REFUND_UPDATED",
+  "LEAD_REENGAGEMENT",
+  "CAMPAIGN_MESSAGE",
+  "CUSTOMER_REQUEST"
+]);
+
+export const smartMessageSchema = z.object({
+  leadId: id.optional(),
+  contactId: id.optional(),
+  conversationId: id.optional(),
+  eventType: messageEventType,
+  messageIntent: z.string().trim().max(500).optional().default(""),
+  isPromotional: z.boolean().optional().default(false),
+  requestedByCustomer: z.boolean().optional().default(false),
+  orderId: id.optional(),
+  quotationId: id.optional(),
+  trackingDetails: z.string().trim().max(1000).optional(),
+  campaignId: id.optional(),
+  templateKey: z.string().trim().min(2).max(100).optional(),
+  templateData: z.record(z.unknown()).optional().default({}),
+  textMessage: z.string().trim().max(4096).optional(),
+  messageType: z.enum(["TEXT", "IMAGE", "DOCUMENT", "AUDIO", "VIDEO", "INTERACTIVE"]).optional().default("TEXT"),
+  attachmentIds: z.array(id).max(20).optional().default([]),
+  metadata: z.record(z.unknown()).optional().default({}),
+  idempotencyKey: z.string().trim().min(4).max(250).optional()
+}).strict().refine((value) => value.leadId || value.contactId, {
+  message: "leadId or contactId is required"
+});
+
+export const campaignScheduleSchema = z.object({
+  startAt: z.coerce.date()
+});
+
+const eventBase = {
+  leadId: id.optional(),
+  contactId: id.optional(),
+  customerName: z.string().trim().max(160).optional(),
+  metadata: z.record(z.unknown()).optional().default({})
+};
+
+export const quotationReadyEventSchema = z.object({
+  ...eventBase,
+  quotationId: id,
+  product: z.string().trim().min(1).max(200),
+  quantity: z.union([z.string(), z.number()]).optional(),
+  amount: z.union([z.string(), z.number()]),
+  quotationUrl: z.string().url()
+}).refine((value) => value.leadId || value.contactId, { message: "leadId or contactId is required" });
+
+export const designProofEventSchema = z.object({
+  ...eventBase,
+  orderId: id,
+  proofUrl: z.string().url()
+}).refine((value) => value.leadId || value.contactId, { message: "leadId or contactId is required" });
+
+export const designApprovalEventSchema = designProofEventSchema;
+
+export const paymentReceivedEventSchema = z.object({
+  ...eventBase,
+  orderId: id,
+  amount: z.union([z.string(), z.number()])
+}).refine((value) => value.leadId || value.contactId, { message: "leadId or contactId is required" });
+
+export const orderDispatchedEventSchema = z.object({
+  ...eventBase,
+  orderId: id,
+  courierName: z.string().trim().min(1).max(160),
+  trackingNumber: z.string().trim().min(1).max(160),
+  trackingUrl: z.string().url().optional()
+}).refine((value) => value.leadId || value.contactId, { message: "leadId or contactId is required" });
 
 export const outboundMessageSchema = z.object({
   text: z.string().trim().max(4096).optional(),

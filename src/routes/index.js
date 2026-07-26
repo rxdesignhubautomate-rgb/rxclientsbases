@@ -14,6 +14,7 @@ import { attachmentsRoutes } from "./attachments.routes.js";
 import { importsRoutes } from "./imports.routes.js";
 import { whatsappRoutes } from "./whatsapp.routes.js";
 import { marketingRoutes } from "./marketing.routes.js";
+import { messagePolicyRoutes } from "./message-policy.routes.js";
 
 export function apiRoutes(container, authenticate) {
   const router = express.Router();
@@ -34,6 +35,7 @@ export function apiRoutes(container, authenticate) {
   router.use("/imports", importsRoutes(controller.imports));
   router.use("/whatsapp", whatsappRoutes(controller.whatsapp));
   router.use("/marketing", marketingRoutes(controller.marketing));
+  router.use(messagePolicyRoutes(container));
   router.get("/system/info", controller.system.info);
   return router;
 }

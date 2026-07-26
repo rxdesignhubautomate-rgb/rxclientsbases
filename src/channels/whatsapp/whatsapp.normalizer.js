@@ -54,7 +54,12 @@ export function normalizeWhatsAppWebhook(payload) {
           status: STATUS_MAP[status.status] || "SENT",
           providerTimestamp: status.timestamp ? new Date(Number(status.timestamp) * 1000) : null,
           error: status.errors?.[0]
-            ? { code: String(status.errors[0].code || "META_ERROR"), message: status.errors[0].title || status.errors[0].message || "Delivery failed" }
+            ? {
+              code: String(status.errors[0].code || "META_ERROR"),
+              title: status.errors[0].title || null,
+              message: status.errors[0].message || status.errors[0].title || "Delivery failed",
+              details: status.errors[0].error_data?.details || null
+            }
             : null,
           metadata: { conversation: status.conversation || null, pricing: status.pricing || null }
         });

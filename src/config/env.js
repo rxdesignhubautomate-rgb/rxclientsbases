@@ -28,7 +28,10 @@ const schema = z.object({
   META_ACCESS_TOKEN: z.string().optional(),
   META_PHONE_NUMBER_ID: z.string().optional(),
   META_WHATSAPP_BUSINESS_ACCOUNT_ID: z.string().optional(),
-  META_GRAPH_API_VERSION: z.string().default("v20.0"),
+  META_GRAPH_API_VERSION: z.string().regex(/^v\d+\.\d+$/).default("v25.0"),
+  META_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(15000),
+  WHATSAPP_TEMPLATE_OVERRIDES_JSON: z.string().default("{}"),
+  ADMIN_API_KEY: z.string().min(24).optional(),
   DEFAULT_CHANNEL_ACCOUNT_ID: z.string().default("WA_RX_01"),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
@@ -45,6 +48,14 @@ const schema = z.object({
   INBOUND_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   CAMPAIGN_POLL_INTERVAL_MS: z.coerce.number().int().min(30000).default(300000),
   CAMPAIGN_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  CAMPAIGN_WORKER_MODE: z.enum(["internal", "external", "endpoint"]).default("internal"),
+  CAMPAIGN_DELAY_MS: z.coerce.number().int().min(0).max(60000).default(250),
+  CAMPAIGN_MAX_RETRIES: z.coerce.number().int().min(1).max(20).default(5),
+  CAMPAIGN_JOB_LOCK_MINUTES: z.coerce.number().int().min(1).max(120).default(15),
+  MARKETING_MAX_24H: z.coerce.number().int().min(1).max(20).default(1),
+  MARKETING_MAX_7D: z.coerce.number().int().min(1).max(50).default(3),
+  MARKETING_MAX_30D: z.coerce.number().int().min(1).max(100).default(8),
+  MARKETING_TEMPLATE_COOLDOWN_HOURS: z.coerce.number().int().min(1).max(720).default(24),
   WORKERS_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
   WORKER_ID: z.string().optional(),
   ENABLE_LEGACY_DUAL_WRITE: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
@@ -64,9 +75,10 @@ const schema = z.object({
 function aliases(source) {
   return {
     ...source,
-    META_ACCESS_TOKEN: source.META_ACCESS_TOKEN || source.WHATSAPP_TOKEN,
     META_VERIFY_TOKEN: source.META_VERIFY_TOKEN || source.WHATSAPP_VERIFY_TOKEN,
-    META_PHONE_NUMBER_ID: source.META_PHONE_NUMBER_ID || source.WHATSAPP_PHONE_NUMBER_ID
+    META_PHONE_NUMBER_ID: source.META_PHONE_NUMBER_ID || source.WHATSAPP_PHONE_NUMBER_ID,
+    META_WHATSAPP_BUSINESS_ACCOUNT_ID: source.META_WHATSAPP_BUSINESS_ACCOUNT_ID || source.WHATSAPP_WABA_ID,
+    META_ACCESS_TOKEN: source.META_ACCESS_TOKEN || source.WHATSAPP_ACCESS_TOKEN || source.WHATSAPP_TOKEN
   };
 }
 
@@ -83,11 +95,22 @@ export function loadEnv(source = process.env) {
     FIREBASE_PRIVATE_KEY: value.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
     ALLOWED_ORIGINS: value.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()).filter(Boolean),
     OUTBOX_RETRY_DELAYS_MS: value.OUTBOX_RETRY_DELAYS_MS.split(",").map(Number).filter(Number.isFinite),
+    WHATSAPP_TEMPLATE_OVERRIDES: parseJsonObject(value.WHATSAPP_TEMPLATE_OVERRIDES_JSON),
     WORKER_ID: value.WORKER_ID || `worker-${process.pid}`
   });
 }
 
 export const env = loadEnv();
+
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("not an object");
+    return parsed;
+  } catch {
+    throw new Error("Invalid environment configuration: WHATSAPP_TEMPLATE_OVERRIDES_JSON must be a JSON object");
+  }
+}
 
 export function assertStartupEnv(value = env) {
   const required = [
@@ -97,7 +120,8 @@ export function assertStartupEnv(value = env) {
     "FIREBASE_STORAGE_BUCKET",
     "META_VERIFY_TOKEN",
     "META_ACCESS_TOKEN",
-    "META_PHONE_NUMBER_ID"
+    "META_PHONE_NUMBER_ID",
+    "META_WHATSAPP_BUSINESS_ACCOUNT_ID"
   ];
   if (value.NODE_ENV === "production") required.push("META_APP_SECRET");
   if (value.AI_DEFAULT_MODE !== "OFF") required.push("OPENAI_API_KEY");

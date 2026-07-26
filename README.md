@@ -6,7 +6,7 @@ The migration is non-destructive. Existing `leads`, `messages`, device approvals
 
 ## Requirements
 
-- Node.js 22 (the current Firebase Admin security release requires Node 22+)
+- Node.js 24 (matching `package.json` and `render.yaml`)
 - A Firebase project with Firestore and Cloud Storage enabled
 - A Meta WhatsApp Cloud API application and phone number
 - An OpenAI API key when AI mode is not `OFF`
@@ -82,6 +82,14 @@ To replace a banned or unavailable account:
 
 Historical messages retain their original `channelAccountId`. See the [channel switch guide](docs/channel-switch-guide.md).
 
+## Policy-safe WhatsApp decisions and campaigns
+
+All new manual replies, AI auto-replies, transactional event notifications, and Marketing campaign steps use a central audited decision service. It selects `SERVICE_MESSAGE`, `UTILITY_TEMPLATE`, `MARKETING_TEMPLATE`, or `DO_NOT_SEND`; promotional content is never relabelled as Utility. Utility events must reference a real order or quotation, Marketing requires recorded opt-in, and every template send requires a synced Meta status of `APPROVED`.
+
+Campaigns support internal submit/approve/schedule/start/pause/resume/cancel operations, deterministic duplicate protection, configurable 24-hour/7-day/30-day frequency limits, Firestore transaction locks, controlled worker delay, and delivery/read/failure counters. Meta approves templates; the CRM separately approves campaigns.
+
+Use `POST /api/v1/whatsapp/templates/sync` after deployment. The complete environment list, architecture, routes, curl examples, worker modes, Firestore collections, Meta manual steps, and troubleshooting notes are in [WhatsApp smart messaging](docs/whatsapp-smart-messaging.md).
+
 ## Firebase configuration
 
 Deploy indexes and the server-owned security rules using the Firebase CLI:
@@ -132,6 +140,7 @@ create duplicates. Only `OWNER` and `ADMIN` users can import.
 - [API reference](docs/api-reference.md)
 - [Firestore schema](docs/firestore-schema.md)
 - [WhatsApp setup](docs/whatsapp-setup.md)
+- [WhatsApp smart messaging and campaign policy](docs/whatsapp-smart-messaging.md)
 - [Migration guide](docs/migration-guide.md)
 - [Render deployment](docs/deployment-render.md)
 - [Security](docs/security.md)

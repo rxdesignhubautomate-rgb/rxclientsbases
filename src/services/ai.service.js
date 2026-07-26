@@ -45,7 +45,7 @@ const summarySchema = z.object({
 });
 
 export class AiService {
-  constructor({ apiKey, model, summaryModel, autoSendEnabled, summaryInterval, store, contacts, conversations, messages, domain, notifications, client }) {
+  constructor({ apiKey, model, summaryModel, autoSendEnabled, summaryInterval, store, contacts, conversations, messages, smartMessages = null, domain, notifications, client }) {
     this.client = client || (apiKey ? new OpenAI({ apiKey }) : null);
     this.model = model;
     this.summaryModel = summaryModel;
@@ -55,6 +55,7 @@ export class AiService {
     this.contacts = contacts;
     this.conversations = conversations;
     this.messages = messages;
+    this.smartMessages = smartMessages;
     this.domain = domain;
     this.notifications = notifications;
   }
@@ -93,15 +94,26 @@ export class AiService {
       !ESCALATION_INTENTS.has(result.intent.toUpperCase()) &&
       result.confidence >= 0.7;
     if (safeAuto) {
-      output = await this.messages.queueOutbound({
-        orgId,
-        conversationId,
-        text: result.reply,
-        senderType: "AI",
-        senderId: "AI",
-        metadata,
-        idempotencyKey: `AI_REPLY:${message.messageId}`
-      });
+      output = this.smartMessages
+        ? await this.smartMessages.smartSend(orgId, {
+          contactId: conversation.contactId,
+          conversationId,
+          eventType: "CUSTOMER_REQUEST",
+          messageIntent: result.intent,
+          requestedByCustomer: true,
+          textMessage: result.reply,
+          idempotencyKey: `AI_REPLY:${message.messageId}`,
+          metadata
+        }, { userId: "AI" })
+        : await this.messages.queueOutbound({
+          orgId,
+          conversationId,
+          text: result.reply,
+          senderType: "AI",
+          senderId: "AI",
+          metadata,
+          idempotencyKey: `AI_REPLY:${message.messageId}`
+        });
     } else {
       output = await this.messages.createDraft({
         orgId,

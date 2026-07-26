@@ -32,6 +32,8 @@ import { PasswordAuthService } from "./services/password-auth.service.js";
 import { UtilityTemplateService } from "./services/utility-template.service.js";
 import { MarketingTemplateService } from "./services/marketing-template.service.js";
 import { MarketingService } from "./services/marketing.service.js";
+import { TemplateRegistryService } from "./services/template-registry.service.js";
+import { SmartMessageService } from "./services/smart-message.service.js";
 import { CampaignWorker } from "./workers/campaign.worker.js";
 
 let singleton;
@@ -49,7 +51,8 @@ export function createContainer(overrides = {}) {
   const whatsappAdapter = overrides.whatsappAdapter || new WhatsAppMetaAdapter({
     accessToken: env.META_ACCESS_TOKEN,
     appSecret: env.META_APP_SECRET,
-    graphApiVersion: env.META_GRAPH_API_VERSION
+    graphApiVersion: env.META_GRAPH_API_VERSION,
+    requestTimeoutMs: env.META_REQUEST_TIMEOUT_MS
   });
   channelManager
     .register("WHATSAPP", "META_CLOUD_API", whatsappAdapter)
@@ -65,8 +68,32 @@ export function createContainer(overrides = {}) {
   const otpMailer = overrides.otpMailer || new OtpMailerService(env);
   const otpAuth = overrides.otpAuth || new OtpAuthService({ store, mailer: otpMailer, env });
   const passwordAuth = overrides.passwordAuth || new PasswordAuthService({ store, auth: firebaseAuth, env });
-  const utilityTemplates = overrides.utilityTemplates || new UtilityTemplateService();
-  const marketingTemplates = overrides.marketingTemplates || new MarketingTemplateService();
+  const utilityTemplates = overrides.utilityTemplates || new UtilityTemplateService({ overrides: env.WHATSAPP_TEMPLATE_OVERRIDES });
+  const marketingTemplates = overrides.marketingTemplates || new MarketingTemplateService({ overrides: env.WHATSAPP_TEMPLATE_OVERRIDES });
+  const templateRegistry = overrides.templateRegistry || new TemplateRegistryService({
+    store,
+    whatsappAdapter,
+    businessAccountId: env.META_WHATSAPP_BUSINESS_ACCOUNT_ID,
+    overrides: env.WHATSAPP_TEMPLATE_OVERRIDES,
+    audit
+  });
+  const smartMessages = overrides.smartMessages || new SmartMessageService({
+    store,
+    contacts,
+    conversations,
+    channelAccounts,
+    messages,
+    utilityTemplates,
+    marketingTemplates,
+    templateRegistry,
+    config: {
+      marketingMax24h: env.MARKETING_MAX_24H,
+      marketingMax7d: env.MARKETING_MAX_7D,
+      marketingMax30d: env.MARKETING_MAX_30D,
+      marketingCooldownHours: env.MARKETING_TEMPLATE_COOLDOWN_HOURS,
+      idempotencyLockMinutes: env.CAMPAIGN_JOB_LOCK_MINUTES
+    }
+  });
   const marketing = overrides.marketing || new MarketingService({
     store,
     contacts,
@@ -74,7 +101,13 @@ export function createContainer(overrides = {}) {
     channelAccounts,
     messages,
     templates: marketingTemplates,
-    audit
+    templateRegistry,
+    smartMessages,
+    audit,
+    config: {
+      jobLockMinutes: env.CAMPAIGN_JOB_LOCK_MINUTES,
+      maxRetries: env.CAMPAIGN_MAX_RETRIES
+    }
   });
   const media = new MediaService({ store, bucket: overrides.bucket || firebase.bucket, channelManager });
   const ai = new AiService({
@@ -87,6 +120,7 @@ export function createContainer(overrides = {}) {
     contacts,
     conversations,
     messages,
+    smartMessages,
     domain,
     imports,
     notifications,
@@ -131,6 +165,7 @@ export function createContainer(overrides = {}) {
     batchSize: env.OUTBOX_BATCH_SIZE,
     maxAttempts: env.MAX_OUTBOX_ATTEMPTS,
     retryDelays: env.OUTBOX_RETRY_DELAYS_MS,
+    campaignDelayMs: env.CAMPAIGN_DELAY_MS,
     workerId: env.WORKER_ID,
     logger
   });
@@ -170,6 +205,8 @@ export function createContainer(overrides = {}) {
     passwordAuth,
     utilityTemplates,
     marketingTemplates,
+    templateRegistry,
+    smartMessages,
     marketing,
     media,
     documents,

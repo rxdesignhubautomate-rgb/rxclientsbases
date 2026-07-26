@@ -76,6 +76,63 @@ describe("WhatsApp marketing campaigns", () => {
     expect(details.stats).toMatchObject({ sent: 1, replied: 1, active: 0 });
   });
 
+  it("separates replied customers, assigns AI temperature, and preserves manual priority controls", async () => {
+    const core = makeCore();
+    const seeded = await seedConversation(core);
+    const marketing = makeMarketing(core);
+    await core.store.set("users", "USR_ANKIT", {
+      userId: "USR_ANKIT",
+      orgId: "RXDH",
+      name: "Ankit",
+      role: "SALES",
+      active: true
+    });
+    await marketing.recordConsent("RXDH", seeded.contact.contactId, { status: "OPTED_IN", source: "PHONE", note: "Asked for updates" });
+    const audience = await marketing.createAudience("RXDH", { name: "Reply prospects", contactIds: [seeded.contact.contactId] });
+    const campaign = await marketing.createCampaign("RXDH", {
+      name: "Reply qualification",
+      audienceId: audience.audienceId,
+      interestLabel: "catalogue printing",
+      templateId: "interest_followup",
+      steps: [{ delayDays: 0, messageLine: "Would you like a quotation?" }]
+    });
+    await marketing.launchCampaign("RXDH", campaign.campaignId);
+    await marketing.processDue(10);
+    const message = { messageId: "MSG_HOT_REPLY", conversationId: seeded.conversation.conversationId, text: "Yes, please send price and quotation" };
+    const campaignContext = await marketing.handleInbound({ orgId: "RXDH", contactId: seeded.contact.contactId, message });
+    expect(campaignContext).toMatchObject({ campaignReply: true, campaignId: campaign.campaignId });
+    const prospect = await marketing.recordRepliedProspect({
+      orgId: "RXDH",
+      contactId: seeded.contact.contactId,
+      message,
+      campaignContext,
+      aiResult: {
+        skipped: false,
+        result: {
+          intent: "QUOTATION_REQUEST",
+          leadUpdates: { interestLevel: "HIGH" },
+          confidence: 0.91,
+          reason: "Customer asked for pricing and a quotation"
+        }
+      }
+    });
+    expect(prospect).toMatchObject({ aiTemperature: "HOT", classificationSource: "AI", replyCount: 1, important: false });
+
+    const updated = await marketing.updateRepliedProspect("RXDH", seeded.contact.contactId, {
+      important: true,
+      assignedTo: "USR_ANKIT",
+      repeatMarketing: true
+    }, { userId: "USR_ADMIN" });
+    expect(updated).toMatchObject({ important: true, assignedTo: "USR_ANKIT", repeatMarketing: true });
+    const important = await marketing.listRepliedProspects("RXDH", { important: true, temperature: "HOT", limit: 100 });
+    expect(important.items).toHaveLength(1);
+    expect(important.items[0].contactId).toBe(seeded.contact.contactId);
+
+    await marketing.recordConsent("RXDH", seeded.contact.contactId, { status: "OPTED_OUT", source: "WHATSAPP_REPLY", note: "STOP" });
+    const suppressed = await core.store.get("marketingProspects", seeded.contact.contactId);
+    expect(suppressed).toMatchObject({ suppressed: true, repeatMarketing: false });
+  });
+
   it("honours STOP and records an opt-out", async () => {
     const core = makeCore();
     const seeded = await seedConversation(core);
@@ -89,6 +146,24 @@ describe("WhatsApp marketing campaigns", () => {
     const contact = await core.contacts.get("RXDH", seeded.contact.contactId);
     expect(contact.marketingConsent.status).toBe("OPTED_OUT");
     expect(contact.marketingConsent.source).toBe("WHATSAPP_REPLY");
+  });
+
+  it("recognizes Hindi opt-out and requires an explicit opt-in phrase", async () => {
+    const core = makeCore();
+    const seeded = await seedConversation(core);
+    const marketing = makeMarketing(core);
+    await marketing.handleInbound({
+      orgId: "RXDH",
+      contactId: seeded.contact.contactId,
+      message: { messageId: "MSG_STOP_HI", conversationId: seeded.conversation.conversationId, text: "message mat karo" }
+    });
+    expect((await core.contacts.get("RXDH", seeded.contact.contactId)).marketingOptOut).toBe(true);
+    await marketing.handleInbound({
+      orgId: "RXDH",
+      contactId: seeded.contact.contactId,
+      message: { messageId: "MSG_START", conversationId: seeded.conversation.conversationId, text: "START" }
+    });
+    expect((await core.contacts.get("RXDH", seeded.contact.contactId)).marketingConsent.status).toBe("OPTED_IN");
   });
 
   it("loads Marketing data and due work without composite Firestore indexes", async () => {
@@ -122,5 +197,26 @@ describe("WhatsApp marketing campaigns", () => {
     await expect(marketing.listCampaigns("RXDH", { limit: 100 })).resolves.toMatchObject({ items: [{ campaignId: campaign.campaignId }] });
     await expect(marketing.getCampaign("RXDH", campaign.campaignId, { includeEnrollments: true })).resolves.toMatchObject({ campaignId: campaign.campaignId });
     await expect(marketing.processDue(10)).resolves.toHaveLength(1);
+  });
+
+  it("requires internal approval on the strict campaign start route", async () => {
+    const core = makeCore();
+    const seeded = await seedConversation(core);
+    const marketing = makeMarketing(core);
+    await marketing.recordConsent("RXDH", seeded.contact.contactId, { status: "OPTED_IN", source: "PHONE", note: "Requested updates" });
+    const audience = await marketing.createAudience("RXDH", { name: "Approved buyers", contactIds: [seeded.contact.contactId] });
+    const campaign = await marketing.createCampaign("RXDH", {
+      name: "Approval campaign",
+      audienceId: audience.audienceId,
+      interestLabel: "catalogue printing",
+      templateId: "interest_followup",
+      steps: [{ delayDays: 0, messageLine: "Would you like more details?" }]
+    }, { userId: "USR_CREATOR" });
+    await expect(marketing.startCampaign("RXDH", campaign.campaignId, {}, { userId: "USR_ADMIN" })).rejects.toThrow(/internally approved/);
+    await marketing.submitCampaign("RXDH", campaign.campaignId, { userId: "USR_CREATOR" });
+    const approved = await marketing.approveCampaign("RXDH", campaign.campaignId, { userId: "USR_ADMIN" });
+    expect(approved).toMatchObject({ status: "APPROVED", approvedBy: "USR_ADMIN" });
+    const started = await marketing.startCampaign("RXDH", campaign.campaignId, {}, { userId: "USR_ADMIN" });
+    expect(started).toMatchObject({ status: "ACTIVE", lifecycleStatus: "RUNNING" });
   });
 });

@@ -29,7 +29,13 @@ let buildingCount = 0;
 for (const [collectionGroup, desiredIndexes] of groups) {
   const baseUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/(default)/collectionGroups/${encodeURIComponent(collectionGroup)}/indexes`;
   const response = await auth.request({ url: baseUrl, method: "GET" });
-  const existingIndexes = response.data.indexes || [];
+  // The Firestore API can return indexes from other collection groups here.
+  // Scope the comparison to the group currently being checked so a matching
+  // field layout on another collection cannot be reported as this index.
+  const groupMarker = `/collectionGroups/${collectionGroup}/indexes/`;
+  const existingIndexes = (response.data.indexes || []).filter((index) =>
+    String(index.name || "").includes(groupMarker)
+  );
 
   for (const desired of desiredIndexes) {
     const current = existingIndexes.find((candidate) => sameIndex(candidate, desired));
@@ -63,8 +69,8 @@ console.log(JSON.stringify({ dryRun, configured: definition.indexes?.length || 0
 
 function sameIndex(current, desired) {
   if ((current.queryScope || "COLLECTION") !== (desired.queryScope || "COLLECTION")) return false;
-  const currentFields = (current.fields || []).filter((field) => field.fieldPath !== "__name__");
-  const desiredFields = desired.fields || [];
+  const currentFields = current.fields || [];
+  const desiredFields = withDocumentName(desired.fields || []);
   return currentFields.length === desiredFields.length && currentFields.every((field, index) => {
     const wanted = desiredFields[index];
     return field.fieldPath === wanted.fieldPath

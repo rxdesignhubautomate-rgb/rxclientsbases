@@ -1,10 +1,11 @@
 export class ChannelError extends Error {
-  constructor(message, { status = 500, code = "CHANNEL_ERROR", retryable = true } = {}) {
+  constructor(message, { status = 500, code = "CHANNEL_ERROR", retryable = true, details = undefined } = {}) {
     super(message);
     this.name = "ChannelError";
     this.status = status;
     this.code = code;
     this.retryable = retryable;
+    this.details = details;
   }
 }
 

@@ -4,7 +4,7 @@ import { now, toDate } from "../utils/dates.js";
 import { PollLoop } from "./poll-loop.js";
 
 export class OutboundWorker {
-  constructor({ store, channelManager, channelAccounts, media, notifications, intervalMs, batchSize, maxAttempts, retryDelays, workerId, logger }) {
+  constructor({ store, channelManager, channelAccounts, media, notifications, intervalMs, batchSize, maxAttempts, retryDelays, campaignDelayMs = 0, workerId, logger }) {
     this.store = store;
     this.channelManager = channelManager;
     this.channelAccounts = channelAccounts;
@@ -14,6 +14,7 @@ export class OutboundWorker {
     this.batchSize = batchSize;
     this.maxAttempts = maxAttempts;
     this.retryDelays = retryDelays;
+    this.campaignDelayMs = campaignDelayMs;
     this.workerId = workerId;
     this.logger = logger;
     this.loop = new PollLoop({
@@ -71,6 +72,10 @@ export class OutboundWorker {
       if (account.status !== "ACTIVE" || account.sendEnabled !== true) throw permanentError("Channel account is disabled", "ACCOUNT_DISABLED");
       const attachments = await this.media.prepareForSend(claimed.orgId, message.attachmentIds || []);
       const result = await this.channelManager.send({ account, message, attachments });
+      const decisionAudits = await this.store.find(COLLECTIONS.messageAuditLogs, {
+        filters: [["messageId", "==", message.messageId]],
+        limit: 5
+      });
       await this.store.runTransaction(async (tx) => {
         tx.update(COLLECTIONS.messages, message.messageId, {
           status: "SENT",
@@ -87,7 +92,26 @@ export class OutboundWorker {
           sentAt: now(),
           updatedAt: now()
         });
+        if (message.metadata?.messageDecisionKey) {
+          tx.update(COLLECTIONS.messageDecisionKeys, message.metadata.messageDecisionKey, {
+            status: "SENT",
+            metaMessageId: result.providerMessageId,
+            sentAt: now(),
+            updatedAt: now()
+          });
+        }
+        for (const audit of decisionAudits.items.filter((item) => item.orgId === claimed.orgId)) {
+          tx.update(COLLECTIONS.messageAuditLogs, audit.messageAuditLogId || audit.id, {
+            sent: true,
+            queued: false,
+            metaMessageId: result.providerMessageId,
+            sentAt: now()
+          });
+        }
       });
+      if (message.metadata?.campaignId && this.campaignDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.campaignDelayMs));
+      }
     } catch (error) {
       await this.failOrRetry(claimed, error);
     }
@@ -97,6 +121,11 @@ export class OutboundWorker {
     const permanent = error.retryable === false;
     const final = permanent || record.attemptCount >= this.maxAttempts;
     const details = sanitize(error);
+    const message = await this.store.get(COLLECTIONS.messages, record.messageId);
+    const decisionAudits = await this.store.find(COLLECTIONS.messageAuditLogs, {
+      filters: [["messageId", "==", record.messageId]],
+      limit: 5
+    });
     if (!final) {
       const delay = this.retryDelays[Math.min(record.attemptCount, this.retryDelays.length - 1)] || 60_000;
       await this.store.runTransaction(async (tx) => {
@@ -114,6 +143,21 @@ export class OutboundWorker {
           errorMessage: details.message,
           updatedAt: now()
         });
+        if (message?.metadata?.messageDecisionKey) {
+          tx.update(COLLECTIONS.messageDecisionKeys, message.metadata.messageDecisionKey, {
+            status: "RETRY",
+            lastError: details,
+            updatedAt: now()
+          });
+        }
+        for (const audit of decisionAudits.items.filter((item) => item.orgId === record.orgId)) {
+          tx.update(COLLECTIONS.messageAuditLogs, audit.messageAuditLogId || audit.id, {
+            queued: true,
+            errorCode: details.code,
+            errorMessage: details.message,
+            updatedAt: now()
+          });
+        }
       });
       return;
     }
@@ -134,6 +178,22 @@ export class OutboundWorker {
         manualRetryStatus: "AVAILABLE",
         createdAt: now()
       });
+      if (message?.metadata?.messageDecisionKey) {
+        tx.update(COLLECTIONS.messageDecisionKeys, message.metadata.messageDecisionKey, {
+          status: "FAILED",
+          lastError: details,
+          updatedAt: now()
+        });
+      }
+      for (const audit of decisionAudits.items.filter((item) => item.orgId === record.orgId)) {
+        tx.update(COLLECTIONS.messageAuditLogs, audit.messageAuditLogId || audit.id, {
+          sent: false,
+          queued: false,
+          errorCode: details.code,
+          errorMessage: details.message,
+          updatedAt: now()
+        });
+      }
     });
     await this.notifications.create(record.orgId, {
       type: "OUTBOX_DEAD_LETTER",

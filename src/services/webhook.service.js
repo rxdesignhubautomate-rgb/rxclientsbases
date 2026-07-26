@@ -83,7 +83,14 @@ export class WebhookService {
     const results = [];
     for (const event of normalized) {
       if (event.kind === "STATUS") {
-        results.push(await this.messages.updateProviderStatus(this.orgId, event.providerMessageId, event.status, event.error));
+        results.push(await this.messages.updateProviderStatus(
+          this.orgId,
+          event.providerMessageId,
+          event.status,
+          event.error,
+          event.providerTimestamp,
+          event.metadata
+        ));
         continue;
       }
       const { contact } = await this.contacts.resolveInboundIdentity({
@@ -131,6 +138,24 @@ export class WebhookService {
         metadata: event.metadata
       });
       if (!saved.duplicate) {
+        const receivedAt = now();
+        const serviceWindowExpiresAt = new Date(receivedAt.getTime() + 24 * 60 * 60 * 1000);
+        const freeEntryWindowExpiresAt = event.metadata?.referral
+          ? new Date(receivedAt.getTime() + 72 * 60 * 60 * 1000)
+          : null;
+        const windowPatch = {
+          lastUserMessageAt: receivedAt,
+          serviceWindowExpiresAt,
+          ...(freeEntryWindowExpiresAt ? { freeEntryWindowExpiresAt } : {}),
+          updatedAt: receivedAt
+        };
+        await Promise.all([
+          this.store.update(COLLECTIONS.leads, lead.leadId, windowPatch),
+          this.store.update(COLLECTIONS.contacts, contact.contactId, windowPatch)
+        ]);
+      }
+      let marketingResult = null;
+      if (!saved.duplicate) {
         await this.legacyDualWrite.saveInbound({
           channel: "WHATSAPP",
           senderId: event.externalUserId,
@@ -138,12 +163,18 @@ export class WebhookService {
           providerMessageId: event.providerMessageId
         });
         if (this.marketing) {
-          await this.marketing.handleInbound({
+          marketingResult = await this.marketing.handleInbound({
             orgId: this.orgId,
             contactId: contact.contactId,
             message: saved.message
           });
         }
+      } else if (this.marketing) {
+        marketingResult = await this.marketing.handleInbound({
+          orgId: this.orgId,
+          contactId: contact.contactId,
+          message: saved.message
+        });
       }
       if (event.media && !saved.duplicate) {
         try {
@@ -185,12 +216,50 @@ export class WebhookService {
           });
         }
       }
-      const aiResult = await this.ai.processInbound({
-        orgId: this.orgId,
-        conversationId: conversation.conversationId,
-        message: saved.message
-      });
-      results.push({ saved, aiResult });
+      let aiResult;
+      if (marketingResult?.optedOut) {
+        await this.messages.queueOutbound({
+          orgId: this.orgId,
+          conversationId: conversation.conversationId,
+          text: "You have been unsubscribed from RX Design Hub marketing messages. Reply START if you want to opt in again.",
+          type: "TEXT",
+          metadata: { consentConfirmation: "OPTED_OUT" },
+          senderType: "SYSTEM",
+          senderId: "CONSENT_MANAGER",
+          idempotencyKey: `OPT_OUT_CONFIRMATION:${saved.message.messageId}`
+        });
+        aiResult = { skipped: true, reason: "Customer opted out; AI reply suppressed" };
+      } else if (saved.duplicate) {
+        aiResult = { skipped: true, reason: "DUPLICATE_MESSAGE" };
+      } else {
+        aiResult = await this.ai.processInbound({
+          orgId: this.orgId,
+          conversationId: conversation.conversationId,
+          message: saved.message
+        });
+      }
+      let marketingProspect = null;
+      if (!saved.duplicate && marketingResult?.campaignReply && this.marketing) {
+        try {
+          marketingProspect = await this.marketing.recordRepliedProspect({
+            orgId: this.orgId,
+            contactId: contact.contactId,
+            message: saved.message,
+            campaignContext: marketingResult,
+            aiResult
+          });
+        } catch (error) {
+          await this.notifications.create(this.orgId, {
+            type: "MARKETING_REPLY_CLASSIFICATION_FAILED",
+            severity: "WARNING",
+            title: "Campaign reply needs manual classification",
+            entityType: "CONTACT",
+            entityId: contact.contactId,
+            metadata: { messageId: saved.message.messageId, error: error.message.slice(0, 300) }
+          });
+        }
+      }
+      results.push({ saved, aiResult, marketingResult, marketingProspect });
     }
     await this.store.update(COLLECTIONS.webhookEvents, webhookEventId, {
       channelAccountId: account.channelAccountId || account.id,

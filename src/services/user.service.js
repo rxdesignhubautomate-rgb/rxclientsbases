@@ -22,15 +22,18 @@ export class UserService {
     return user;
   }
 
-  list(orgId, options = {}) {
-    return this.store.find(COLLECTIONS.users, {
+  async list(orgId, options = {}) {
+    const result = await this.store.find(COLLECTIONS.users, {
       filters: [["orgId", "==", orgId]],
-      orderBy: ["createdAt", "desc"],
       limit: options.limit || 100,
       cursor: options.cursor,
       search: options.search,
       searchFields: ["name", "email", "phone", "role"]
     });
+    return {
+      ...result,
+      items: result.items.sort((left, right) => timestamp(right.createdAt) - timestamp(left.createdAt))
+    };
   }
 
   async update(orgId, userId, patch, actor = {}) {
@@ -46,4 +49,12 @@ export class UserService {
     await this.audit.write({ orgId, actorType: "USER", actorId: actor.userId, action: "USER_PERMISSIONS_CHANGED", entityType: "USER", entityId: userId, before, after: allowed });
     return { ...before, ...allowed };
   }
+}
+
+function timestamp(value) {
+  if (!value) return 0;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (Number.isFinite(value._seconds)) return value._seconds * 1000;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 }

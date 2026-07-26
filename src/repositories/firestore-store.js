@@ -13,8 +13,12 @@ export class FirestoreStore {
   async getMany(collection, ids = []) {
     const uniqueIds = [...new Set(ids.filter(Boolean))];
     if (!uniqueIds.length) return [];
-    const snapshots = await this.db.getAll(...uniqueIds.map((id) => this.db.collection(collection).doc(id)));
-    return snapshots.filter((snap) => snap.exists).map((snap) => ({ id: snap.id, ...snap.data() }));
+    const items = [];
+    for (let index = 0; index < uniqueIds.length; index += 300) {
+      const snapshots = await this.db.getAll(...uniqueIds.slice(index, index + 300).map((id) => this.db.collection(collection).doc(id)));
+      items.push(...snapshots.filter((snap) => snap.exists).map((snap) => ({ id: snap.id, ...snap.data() })));
+    }
+    return items;
   }
 
   async set(collection, id, data, options = { merge: false }) {

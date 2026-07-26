@@ -15,6 +15,7 @@ Object.assign(process.env, {
   META_VERIFY_TOKEN: "smoke-verify",
   META_ACCESS_TOKEN: "smoke-access",
   META_PHONE_NUMBER_ID: "smoke-phone",
+  META_WHATSAPP_BUSINESS_ACCOUNT_ID: "smoke-waba",
   OPENAI_API_KEY: "smoke-openai",
   WORKERS_ENABLED: "false",
   LEGACY_JOBS_ENABLED: "false"

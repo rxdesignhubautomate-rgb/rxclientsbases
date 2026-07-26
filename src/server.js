@@ -16,7 +16,7 @@ server.listen(env.PORT, () => {
     container.workers.inbound.start();
     container.workers.outbound.start();
     container.workers.media.start();
-    container.workers.campaign.start();
+    if (env.CAMPAIGN_WORKER_MODE === "internal") container.workers.campaign.start();
   }
   if (env.LEGACY_JOBS_ENABLED) {
     startSequenceScheduler();

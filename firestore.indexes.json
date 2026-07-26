@@ -134,6 +134,18 @@
     ]},
     { "collectionGroup": "campaignEnrollments", "queryScope": "COLLECTION", "fields": [
       { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "contactId", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "messages", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "leadId", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "messageAuditLogs", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "contactId", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]},
+    { "collectionGroup": "marketingCampaigns", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "status", "order": "ASCENDING" }, { "fieldPath": "startAt", "order": "ASCENDING" }
+    ]},
+    { "collectionGroup": "templateRegistry", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "orgId", "order": "ASCENDING" }, { "fieldPath": "name", "order": "ASCENDING" }, { "fieldPath": "language", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" }
     ]}
   ],
   "fieldOverrides": []

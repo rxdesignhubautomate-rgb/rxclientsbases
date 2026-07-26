@@ -5,13 +5,16 @@ import {
   marketingAudienceSchema,
   marketingCampaignSchema,
   marketingConsentSchema,
-  marketingLaunchSchema
+  marketingLaunchSchema,
+  marketingProspectUpdateSchema
 } from "../validators/schemas.js";
 
 export function marketingRoutes(controller) {
   const router = express.Router();
   router.use(authorizeRole("OWNER", "ADMIN"));
   router.get("/templates", controller.templates);
+  router.get("/replied", controller.listReplied);
+  router.patch("/replied/:contactId", validate(marketingProspectUpdateSchema), controller.updateReplied);
   router.patch("/contacts/:contactId/consent", validate(marketingConsentSchema), controller.consent);
   router.get("/audiences", controller.listAudiences);
   router.post("/audiences", validate(marketingAudienceSchema), controller.createAudience);

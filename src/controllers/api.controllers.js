@@ -9,6 +9,7 @@ export function createControllers(container) {
   const c = container;
   const actor = (req) => req.auth;
   const org = (req) => req.auth.orgId;
+  const booleanQuery = (value) => value === "true" ? true : value === "false" ? false : undefined;
   const scopedOptions = (req) => {
     const options = listQuery(req.query);
     if (req.auth.role === "SALES") options.assignedTo = req.auth.userId;
@@ -114,25 +115,49 @@ export function createControllers(container) {
       send: wrap(async (req, res) => {
         const conversation = await c.conversations.get(org(req), req.params.conversationId);
         checkAssigned(req, conversation);
-        const prepared = req.body.type === "TEMPLATE"
-          ? c.utilityTemplates.prepare(req.body.utilityTemplateId, req.body.templateVariables)
-          : { text: req.body.text, type: req.body.type, metadata: req.body.metadata };
-        const result = await c.messages.queueOutbound({
-          orgId: org(req),
-          conversationId: req.params.conversationId,
-          text: prepared.text,
-          type: prepared.type,
+        if (req.body.type === "TEMPLATE") {
+          const template = c.templateRegistry.resolve(req.body.utilityTemplateId, "UTILITY");
+          const values = req.body.templateVariables || {};
+          const result = await c.smartMessages.smartSend(org(req), {
+            contactId: conversation.contactId,
+            conversationId: conversation.conversationId,
+            eventType: template.eventType || template.key,
+            messageIntent: "Transactional customer update",
+            isPromotional: false,
+            requestedByCustomer: true,
+            orderId: values.order_id || values.order_reference,
+            quotationId: values.quotation_id,
+            trackingDetails: values.tracking_details || values.tracking_reference,
+            templateKey: req.body.utilityTemplateId,
+            templateData: values,
+            idempotencyKey: req.headers["idempotency-key"],
+            metadata: req.body.metadata
+          }, actor(req));
+          if (req.body.draftMessageId && result.messageId) {
+            await c.store.update(COLLECTIONS.messages, req.body.draftMessageId, {
+              status: "CANCELLED",
+              approvedAsMessageId: result.messageId,
+              updatedAt: now()
+            });
+          }
+          return sendData(res, result, 202);
+        }
+        const result = await c.smartMessages.smartSend(org(req), {
+          contactId: conversation.contactId,
+          conversationId: conversation.conversationId,
+          eventType: "CUSTOMER_REQUEST",
+          messageIntent: "Reply to customer",
+          requestedByCustomer: true,
+          textMessage: req.body.text,
+          messageType: req.body.type,
           attachmentIds: req.body.attachmentIds,
-          replyToMessageId: req.body.replyToMessageId,
-          metadata: prepared.metadata,
-          senderType: "AGENT",
-          senderId: req.auth.userId,
-          idempotencyKey: req.headers["idempotency-key"]
-        });
-        if (req.body.draftMessageId) {
+          idempotencyKey: req.headers["idempotency-key"],
+          metadata: { ...req.body.metadata, replyToMessageId: req.body.replyToMessageId || null }
+        }, actor(req));
+        if (req.body.draftMessageId && result.messageId) {
           await c.store.update(COLLECTIONS.messages, req.body.draftMessageId, {
             status: "CANCELLED",
-            approvedAsMessageId: result.message?.messageId,
+            approvedAsMessageId: result.messageId,
             updatedAt: now()
           });
         }
@@ -155,6 +180,14 @@ export function createControllers(container) {
     },
     marketing: {
       templates: wrap(async (_req, res) => sendData(res, c.marketing.listTemplates())),
+      listReplied: wrap(async (req, res) => sendList(res, await c.marketing.listRepliedProspects(org(req), {
+        ...listQuery(req.query),
+        temperature: req.query.temperature,
+        important: booleanQuery(req.query.important),
+        repeatMarketing: booleanQuery(req.query.repeatMarketing),
+        assignedTo: req.query.assignedTo
+      }))),
+      updateReplied: wrap(async (req, res) => sendData(res, await c.marketing.updateRepliedProspect(org(req), req.params.contactId, req.body, actor(req)))),
       consent: wrap(async (req, res) => sendData(res, await c.marketing.recordConsent(org(req), req.params.contactId, req.body, actor(req)))),
       listAudiences: wrap(async (req, res) => sendList(res, await c.marketing.listAudiences(org(req), listQuery(req.query)))),
       createAudience: wrap(async (req, res) => sendData(res, await c.marketing.createAudience(org(req), req.body, actor(req)), 201)),

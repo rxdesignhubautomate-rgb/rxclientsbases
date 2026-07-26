@@ -295,21 +295,99 @@ export class MessageService {
     return this.get(orgId, messageId);
   }
 
-  async updateProviderStatus(orgId, providerMessageId, status, error = null) {
+  async updateProviderStatus(orgId, providerMessageId, status, error = null, providerTimestamp = null, providerMetadata = null) {
     const result = await this.store.find(COLLECTIONS.messages, {
       filters: [["orgId", "==", orgId], ["providerMessageId", "==", providerMessageId]],
       limit: 2
     });
     const message = result.items[0];
     if (!message) return null;
-    await this.store.update(COLLECTIONS.messages, message.messageId || message.id, {
-      status,
-      errorCode: error?.code || null,
-      errorMessage: error?.message?.slice(0, 500) || null,
-      updatedAt: now()
+    const messageId = message.messageId || message.id;
+    const decisionAudits = await this.store.find(COLLECTIONS.messageAuditLogs, {
+      filters: [["messageId", "==", messageId]],
+      limit: 5
     });
-    return message;
+    const normalizedStatus = String(status || "SENT").toUpperCase();
+    const statusAt = toSafeDate(providerTimestamp) || now();
+    const firstOccurrence = !message.providerStatusSeen?.[normalizedStatus];
+    await this.store.runTransaction(async (tx) => {
+      const current = await tx.get(COLLECTIONS.messages, messageId);
+      if (!current) return;
+      const campaignId = current.metadata?.campaignId;
+      const enrollmentId = current.metadata?.campaignEnrollmentId;
+      const campaign = campaignId && ["DELIVERED", "READ", "FAILED"].includes(normalizedStatus)
+        ? await tx.get(COLLECTIONS.marketingCampaigns, campaignId)
+        : null;
+      const seen = { ...(current.providerStatusSeen || {}) };
+      const isFirst = !seen[normalizedStatus];
+      seen[normalizedStatus] = statusAt;
+      const patch = {
+        status: advancedStatus(current.status, normalizedStatus),
+        providerStatusSeen: seen,
+        statusTimestamp: statusAt,
+        errorCode: error?.code || null,
+        errorTitle: error?.title || error?.message?.slice(0, 200) || null,
+        errorDetails: error?.details || error?.message?.slice(0, 500) || null,
+        errorMessage: error?.message?.slice(0, 500) || null,
+        providerStatusMetadata: providerMetadata || current.providerStatusMetadata || null,
+        updatedAt: now()
+      };
+      tx.update(COLLECTIONS.messages, messageId, patch);
+      if (current.contactId) {
+        tx.update(COLLECTIONS.contacts, current.contactId, {
+          lastOutboundStatus: patch.status,
+          lastOutboundStatusAt: statusAt,
+          updatedAt: now()
+        });
+      }
+      if (current.leadId) {
+        tx.update(COLLECTIONS.leads, current.leadId, {
+          lastOutboundStatus: patch.status,
+          lastOutboundStatusAt: statusAt,
+          updatedAt: now()
+        });
+      }
+      if (isFirst && enrollmentId) {
+        tx.update(COLLECTIONS.campaignEnrollments, enrollmentId, {
+          lastDeliveryStatus: normalizedStatus,
+          lastDeliveryStatusAt: statusAt,
+          ...(normalizedStatus === "FAILED" ? { failureReason: error?.message?.slice(0, 500) || "META_DELIVERY_FAILED" } : {}),
+          updatedAt: now()
+        });
+      }
+      if (isFirst && campaignId && ["DELIVERED", "READ", "FAILED"].includes(normalizedStatus)) {
+        if (campaign) {
+          const key = normalizedStatus.toLowerCase();
+          const stats = { ...(campaign.stats || {}), [key]: Number(campaign.stats?.[key] || 0) + 1 };
+          tx.update(COLLECTIONS.marketingCampaigns, campaignId, { stats, updatedAt: now() });
+        }
+      }
+      for (const audit of decisionAudits.items.filter((item) => item.orgId === orgId)) {
+        tx.update(COLLECTIONS.messageAuditLogs, audit.messageAuditLogId || audit.id, {
+          lastProviderStatus: normalizedStatus,
+          statusTimestamp: statusAt,
+          errorCode: error?.code || audit.errorCode || null,
+          errorMessage: error?.message?.slice(0, 500) || audit.errorMessage || null,
+          updatedAt: now()
+        });
+      }
+    });
+    return { ...message, status: advancedStatus(message.status, normalizedStatus), duplicateStatus: !firstOccurrence };
   }
+}
+
+function toSafeDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  if (typeof value.toDate === "function") return value.toDate();
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function advancedStatus(current, incoming) {
+  if (incoming === "FAILED") return "FAILED";
+  const rank = { QUEUED: 0, SENDING: 1, SENT: 2, DELIVERED: 3, READ: 4 };
+  return (rank[incoming] ?? 0) >= (rank[current] ?? 0) ? incoming : current;
 }
 
 function preview(text, type) {

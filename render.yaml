@@ -11,7 +11,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: NODE_VERSION
-        value: 22
+        value: 24
       - key: ORG_ID
         value: RXDH
       - key: ORG_TIMEZONE
@@ -38,6 +38,20 @@ services:
         value: "300000"
       - key: CAMPAIGN_BATCH_SIZE
         value: "20"
+      - key: CAMPAIGN_WORKER_MODE
+        value: internal
+      - key: CAMPAIGN_DELAY_MS
+        value: "250"
+      - key: CAMPAIGN_MAX_RETRIES
+        value: "5"
+      - key: CAMPAIGN_JOB_LOCK_MINUTES
+        value: "15"
+      - key: MARKETING_MAX_24H
+        value: "1"
+      - key: MARKETING_MAX_7D
+        value: "3"
+      - key: MARKETING_MAX_30D
+        value: "8"
       - key: LEGACY_JOBS_ENABLED
         value: "false"
       - key: ENABLE_LEGACY_DUAL_WRITE

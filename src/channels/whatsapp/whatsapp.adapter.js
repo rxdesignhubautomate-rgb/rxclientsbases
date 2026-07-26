@@ -1,13 +1,15 @@
 import { BaseChannelAdapter, ChannelError } from "../base-channel.adapter.js";
 import { verifyHmacSha256 } from "../../utils/hashing.js";
 import { normalizeWhatsAppWebhook } from "./whatsapp.normalizer.js";
+import { normalizeIndianPhoneNumber, validatePhoneNumber } from "../../utils/phone.js";
 
 export class WhatsAppMetaAdapter extends BaseChannelAdapter {
-  constructor({ accessToken, appSecret, graphApiVersion = "v20.0", fetchImpl = fetch }) {
+  constructor({ accessToken, appSecret, graphApiVersion = "v25.0", requestTimeoutMs = 15000, fetchImpl = fetch }) {
     super();
     this.accessToken = accessToken;
     this.appSecret = appSecret;
     this.graphApiVersion = graphApiVersion;
+    this.requestTimeoutMs = requestTimeoutMs;
     this.fetch = fetchImpl;
   }
 
@@ -32,6 +34,36 @@ export class WhatsAppMetaAdapter extends BaseChannelAdapter {
     return { providerMessageId: response.messages?.[0]?.id || null, raw: response };
   }
 
+  sendTextMessage({ account, to, text }) {
+    return this.sendMessage({ account, message: { recipientId: to, type: "TEXT", text } });
+  }
+
+  sendTemplateMessage({ account, to, name, language = "en", components = [] }) {
+    return this.sendMessage({
+      account,
+      message: { recipientId: to, type: "TEMPLATE", metadata: { template: { name, language: { code: language }, components } } }
+    });
+  }
+
+  sendInteractiveMessage({ account, to, interactive }) {
+    return this.sendMessage({ account, message: { recipientId: to, type: "INTERACTIVE", metadata: { interactive } } });
+  }
+
+  sendMediaMessage({ account, to, type, media, caption = "" }) {
+    return this.sendMessage({
+      account,
+      message: { recipientId: to, type, text: caption, metadata: { providerMedia: media } }
+    });
+  }
+
+  validatePhoneNumber(value) {
+    return validatePhoneNumber(value);
+  }
+
+  normalizeIndianPhoneNumber(value) {
+    return normalizeIndianPhoneNumber(value);
+  }
+
   async downloadMedia({ media }) {
     const metadata = await this.request(`/${media.providerMediaId}`, { method: "GET" });
     const response = await this.fetch(metadata.url, { headers: { Authorization: `Bearer ${this.accessToken}` } });
@@ -51,23 +83,48 @@ export class WhatsAppMetaAdapter extends BaseChannelAdapter {
     });
   }
 
+  async listMessageTemplates({ businessAccountId, limit = 100 }) {
+    const templates = [];
+    let after = null;
+    for (let page = 0; page < 20; page += 1) {
+      const query = new URLSearchParams({ limit: String(limit), fields: "id,name,language,category,status,quality_score,components" });
+      if (after) query.set("after", after);
+      const response = await this.request(`/${businessAccountId}/message_templates?${query.toString()}`, { method: "GET" });
+      templates.push(...(response.data || []));
+      after = response.paging?.cursors?.after || null;
+      if (!after || !response.paging?.next) break;
+    }
+    return templates;
+  }
+
   async request(path, options) {
-    const response = await this.fetch(`https://graph.facebook.com/${this.graphApiVersion}${path}`, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        "Content-Type": "application/json",
-        ...(options.headers || {})
+    try {
+      const response = await this.fetch(`https://graph.facebook.com/${this.graphApiVersion}${path}`, {
+        ...options,
+        signal: options.signal || globalThis.AbortSignal.timeout(this.requestTimeoutMs),
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          "Content-Type": "application/json",
+          ...(options.headers || {})
+        }
+      });
+      if (!response.ok) throw await channelError(response, "WhatsApp API request failed");
+      return response.json();
+    } catch (error) {
+      if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+        throw new ChannelError("WhatsApp API request timed out", { status: 504, code: "META_TIMEOUT", retryable: true });
       }
-    });
-    if (!response.ok) throw await channelError(response, "WhatsApp API request failed");
-    return response.json();
+      throw error;
+    }
   }
 }
 
 function buildMessageBody(message, attachments) {
   if (message.type === "TEMPLATE" && message.metadata?.template) {
     return { type: "template", template: message.metadata.template };
+  }
+  if (message.type === "INTERACTIVE" && message.metadata?.interactive) {
+    return { type: "interactive", interactive: message.metadata.interactive };
   }
   const attachment = attachments[0];
   const mediaTypes = { IMAGE: "image", DOCUMENT: "document", AUDIO: "audio", VIDEO: "video" };
@@ -100,6 +157,17 @@ async function channelError(response, prefix) {
   return new ChannelError(message, {
     status: response.status,
     code: String(payload.error?.code || "META_ERROR"),
-    retryable
+    retryable,
+    details: {
+      errorSubcode: payload.error?.error_subcode || null,
+      type: payload.error?.type || null,
+      traceId: payload.error?.fbtrace_id || null
+    }
   });
+}
+
+export function buildTemplateComponents(values = []) {
+  return values.length
+    ? [{ type: "body", parameters: values.map((value) => ({ type: "text", text: String(value) })) }]
+    : [];
 }

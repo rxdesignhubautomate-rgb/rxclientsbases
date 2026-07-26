@@ -35,7 +35,11 @@ export const COLLECTIONS = Object.freeze({
   loginSessions: "loginSessions",
   marketingAudiences: "marketingAudiences",
   marketingCampaigns: "marketingCampaigns",
-  campaignEnrollments: "campaignEnrollments"
+  campaignEnrollments: "campaignEnrollments",
+  marketingProspects: "marketingProspects",
+  messageAuditLogs: "messageAuditLogs",
+  messageDecisionKeys: "messageDecisionKeys",
+  templateRegistry: "templateRegistry"
 });
 
 export const CHANNELS = ["WHATSAPP", "WEBSITE", "EMAIL", "PHONE", "INDIAMART", "MANUAL"];
@@ -117,5 +121,6 @@ export const ID_PREFIXES = Object.freeze({
   marketingAudience: "AUDIENCE",
   marketingCampaign: "CAMPAIGN",
   campaignEnrollment: "ENROLL",
+  messageAuditLog: "MAL",
   user: "USR"
 });
