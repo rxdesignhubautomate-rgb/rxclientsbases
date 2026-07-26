@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+!.env.example
+coverage/
+*.log
+migration-reports/*.json
+migration-reports/*.csv
+firebase-debug.log
+service-account*.json
+*.pem
+.DS_Store
