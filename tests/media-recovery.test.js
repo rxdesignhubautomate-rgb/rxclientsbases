@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
 import { MediaService } from "../src/services/media.service.js";
 import { makeCore, seedConversation } from "./helpers/core.js";
 
@@ -116,6 +117,58 @@ describe("WhatsApp media recovery", () => {
       filename: "quotation.pdf"
     }));
     expect(refreshed.providerMediaId).toBe("meta-media-2");
+  });
+
+  it("repairs a legacy CMYK image before uploading it to Meta", async () => {
+    const core = makeCore();
+    const bucket = memoryBucket();
+    const cmykImage = await sharp({
+      create: {
+        width: 500,
+        height: 700,
+        channels: 3,
+        background: "#00a884"
+      }
+    })
+      .toColourspace("cmyk")
+      .jpeg({ quality: 95 })
+      .toBuffer();
+    const uploaded = [];
+    const channelManager = {
+      uploadMedia: vi.fn(async ({ buffer }) => {
+        uploaded.push(buffer);
+        return "meta-media-rgb";
+      })
+    };
+    const media = new MediaService({
+      store: core.store,
+      bucket,
+      channelManager,
+      channelAccounts: core.channelAccounts
+    });
+    const legacyAttachment = await media.storeBuffer({
+      orgId: "RXDH",
+      contactId: "CNT_TEST",
+      buffer: cmykImage,
+      mimeType: "image/jpeg",
+      originalFilename: "legacy-quotation.jpg"
+    });
+
+    const mediaId = await media.ensureProviderMediaId({
+      orgId: "RXDH",
+      account: { phoneNumberId: "phone-id" },
+      attachment: legacyAttachment
+    });
+    const uploadedMetadata = await sharp(uploaded[0]).metadata();
+    const repairedAttachment = await media.get("RXDH", legacyAttachment.attachmentId);
+
+    expect(mediaId).toBe("meta-media-rgb");
+    expect(uploadedMetadata.space).toBe("srgb");
+    expect(uploadedMetadata.channels).toBe(3);
+    expect(uploadedMetadata.depth).toBe("uchar");
+    expect(uploaded[0].length).toBeLessThanOrEqual(5 * 1024 * 1024);
+    expect(repairedAttachment.whatsappMedia.normalized).toBe(true);
+    expect(repairedAttachment.providerMediaId).toBe("meta-media-rgb");
   });
 
   it("can upload bytes even when Firebase signed URL generation fails", async () => {

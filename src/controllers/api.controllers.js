@@ -407,7 +407,8 @@ export function createControllers(container) {
           messageId: null,
           buffer: req.body,
           mimeType: req.headers["content-type"],
-          originalFilename: decodeUploadName(req.headers["x-filename"])
+          originalFilename: decodeUploadName(req.headers["x-filename"]),
+          normalizeForWhatsApp: true
         });
         return sendData(res, attachment, 201);
       })

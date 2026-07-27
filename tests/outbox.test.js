@@ -125,6 +125,50 @@ describe("outbox processing", () => {
     }, "media_upload_to_meta_failed_falling_back_to_link");
   });
 
+  it("clears an invalid cached Meta media id before a manual retry", async () => {
+    const core = makeCore();
+    const { conversation } = await seedConversation(core);
+    const attachmentId = "ATT_INVALID_META_IMAGE";
+    await core.store.create(COLLECTIONS.attachments, attachmentId, {
+      attachmentId,
+      orgId: "RXDH",
+      storagePath: "files/invalid.jpg",
+      mimeType: "image/jpeg",
+      originalFilename: "invalid.jpg",
+      providerMediaId: "invalid-meta-media-id"
+    });
+    const queued = await core.messages.queueOutbound({
+      orgId: "RXDH",
+      conversationId: conversation.conversationId,
+      type: "IMAGE",
+      attachmentIds: [attachmentId]
+    });
+    await core.store.update(COLLECTIONS.outbox, queued.outbox.outboxId, {
+      status: "SENT"
+    });
+    await core.store.update(COLLECTIONS.messages, queued.message.messageId, {
+      status: "FAILED",
+      errorCode: 131053,
+      errorTitle: "Media upload error",
+      errorDetails: "Image is invalid",
+      errorMessage: "Media upload error"
+    });
+
+    const retry = await core.messages.retry("RXDH", queued.message.messageId, {
+      userId: "USR_ADMIN"
+    });
+    const attachment = await core.store.get(COLLECTIONS.attachments, attachmentId);
+    const message = await core.messages.get("RXDH", queued.message.messageId);
+
+    expect(retry.status).toBe("PENDING");
+    expect(attachment.providerMediaId).toBeNull();
+    expect(message.status).toBe("QUEUED");
+    expect(message.errorCode).toBeNull();
+    expect(message.errorTitle).toBeNull();
+    expect(message.errorDetails).toBeNull();
+    expect(message.errorMessage).toBeNull();
+  });
+
   it("moves permanent failures to dead letters and notifies admins", async () => {
     const core = makeCore();
     const { conversation } = await seedConversation(core);

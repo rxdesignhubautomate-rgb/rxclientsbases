@@ -3,13 +3,21 @@ import { createId } from "../utils/ids.js";
 import { sha256 } from "../utils/hashing.js";
 import { now } from "../utils/dates.js";
 import { ConflictError, NotFoundError } from "../utils/errors.js";
+import { normalizeWhatsAppImage } from "./whatsapp-image-normalizer.js";
 
 export class MediaService {
-  constructor({ store, bucket, channelManager, channelAccounts = null }) {
+  constructor({
+    store,
+    bucket,
+    channelManager,
+    channelAccounts = null,
+    imageNormalizer = normalizeWhatsAppImage,
+  }) {
     this.store = store;
     this.bucket = bucket;
     this.channelManager = channelManager;
     this.channelAccounts = channelAccounts;
+    this.imageNormalizer = imageNormalizer;
   }
 
   async downloadAndStore({ orgId, account, contactId, conversationId, messageId, media }) {
@@ -34,14 +42,27 @@ export class MediaService {
   }
 
   async storeBuffer(input) {
+    const prepared = input.normalizeForWhatsApp
+      ? await this.imageNormalizer({
+          buffer: input.buffer,
+          mimeType: input.mimeType,
+          filename: input.originalFilename,
+        })
+      : {
+          buffer: input.buffer,
+          mimeType: input.mimeType || "application/octet-stream",
+          filename: input.originalFilename,
+          normalized: false,
+          metadata: null,
+        };
     const attachmentId = createId("attachment");
-    const actualHash = sha256(input.buffer);
-    const extension = safeExtension(input.originalFilename);
+    const actualHash = sha256(prepared.buffer);
+    const extension = safeExtension(prepared.filename);
     const storagePath = `organizations/${input.orgId}/contacts/${input.contactId}/${attachmentId}${extension}`;
     const file = this.bucket.file(storagePath);
-    await file.save(input.buffer, {
+    await file.save(prepared.buffer, {
       resumable: false,
-      contentType: input.mimeType || "application/octet-stream",
+      contentType: prepared.mimeType || "application/octet-stream",
       metadata: { metadata: { attachmentId, sha256: actualHash } }
     });
     const attachment = {
@@ -51,12 +72,19 @@ export class MediaService {
       conversationId: input.conversationId || null,
       messageId: input.messageId || null,
       storagePath,
-      originalFilename: input.originalFilename || attachmentId,
-      mimeType: input.mimeType || "application/octet-stream",
-      sizeBytes: input.buffer.length,
+      originalFilename: prepared.filename || attachmentId,
+      mimeType: prepared.mimeType || "application/octet-stream",
+      sizeBytes: prepared.buffer.length,
       sha256: actualHash,
       providerMediaId: input.providerMediaId || null,
       providerHashMatched: input.expectedSha256 ? input.expectedSha256 === actualHash : null,
+      whatsappMedia: prepared.normalized
+        ? {
+            normalized: true,
+            ...prepared.metadata,
+            normalizedAt: now(),
+          }
+        : null,
       scanStatus: "PENDING",
       createdAt: now()
     };
@@ -167,12 +195,40 @@ export class MediaService {
   async ensureProviderMediaId({ orgId, account, attachment }) {
     if (attachment.orgId !== orgId) throw new NotFoundError("Attachment");
     if (attachment.providerMediaId) return attachment.providerMediaId;
-    const [buffer] = await this.bucket.file(attachment.storagePath).download();
+    const file = this.bucket.file(attachment.storagePath);
+    let [buffer] = await file.download();
+    let mimeType = attachment.mimeType;
+    let filename = attachment.originalFilename;
+    if (String(mimeType || "").startsWith("image/") && attachment.whatsappMedia?.normalized !== true) {
+      const prepared = await this.imageNormalizer({ buffer, mimeType, filename });
+      buffer = prepared.buffer;
+      mimeType = prepared.mimeType;
+      filename = prepared.filename;
+      const actualHash = sha256(buffer);
+      await file.save(buffer, {
+        resumable: false,
+        contentType: mimeType,
+        metadata: { metadata: { attachmentId: attachment.attachmentId, sha256: actualHash } }
+      });
+      await this.store.update(COLLECTIONS.attachments, attachment.attachmentId, {
+        originalFilename: filename,
+        mimeType,
+        sizeBytes: buffer.length,
+        sha256: actualHash,
+        providerMediaId: null,
+        whatsappMedia: {
+          normalized: true,
+          ...prepared.metadata,
+          normalizedAt: now()
+        },
+        updatedAt: now()
+      });
+    }
     const mediaId = await this.channelManager.uploadMedia({
       account,
       buffer,
-      mimeType: attachment.mimeType,
-      filename: attachment.originalFilename
+      mimeType,
+      filename
     });
     await this.store.update(COLLECTIONS.attachments, attachment.attachmentId, {
       providerMediaId: mediaId,

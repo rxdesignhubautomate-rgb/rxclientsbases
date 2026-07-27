@@ -23,6 +23,9 @@
     "firestore:indexes:check": "node src/scripts/sync-firestore-indexes.js --dry-run",
     "firestore:indexes:sync": "node src/scripts/sync-firestore-indexes.js",
     "diagnose:dashboard": "node src/scripts/diagnose-dashboard-queries.js",
+    "diagnose:media-outbox": "node src/scripts/diagnose-media-outbox.js",
+    "diagnose:storage": "node src/scripts/diagnose-storage-bucket.js",
+    "sync:broadcast-audiences": "node src/scripts/sync-broadcast-audiences.js",
     "seed:channel": "node src/scripts/seed-channel-account.js",
     "seed:admin": "node src/scripts/create-admin-user.js"
   },
@@ -39,6 +42,7 @@
     "pdfkit": "^0.16.0",
     "pino": "^9.6.0",
     "pino-http": "^10.4.0",
+    "sharp": "^0.35.0",
     "ulid": "^3.0.0",
     "zod": "^3.24.2"
   },

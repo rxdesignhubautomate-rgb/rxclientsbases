@@ -299,8 +299,27 @@ export class MessageService {
       updatedAt: timestamp,
       manualRetryBy: actor.userId
     };
+    if (String(message.errorCode || "") === "131053" && ["IMAGE", "VIDEO", "AUDIO", "DOCUMENT"].includes(message.type)) {
+      for (const attachmentId of message.attachmentIds || []) {
+        const attachment = await this.store.get(COLLECTIONS.attachments, attachmentId);
+        if (attachment?.orgId === orgId) {
+          await this.store.update(COLLECTIONS.attachments, attachmentId, {
+            providerMediaId: null,
+            updatedAt: timestamp
+          });
+        }
+      }
+    }
     await this.store.create(COLLECTIONS.outbox, outboxId, outbox);
-    await this.store.update(COLLECTIONS.messages, messageId, { status: "QUEUED", channelAccountId, errorCode: null, errorMessage: null, updatedAt: timestamp });
+    await this.store.update(COLLECTIONS.messages, messageId, {
+      status: "QUEUED",
+      channelAccountId,
+      errorCode: null,
+      errorTitle: null,
+      errorDetails: null,
+      errorMessage: null,
+      updatedAt: timestamp
+    });
     await this.audit.write({ orgId, actorType: "USER", actorId: actor.userId, action: "MESSAGE_RETRIED", entityType: "MESSAGE", entityId: messageId, after: { outboxId } });
     return outbox;
   }
