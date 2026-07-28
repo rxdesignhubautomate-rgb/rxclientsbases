@@ -1,0 +1,291 @@
+import { COLLECTIONS } from "../config/constants.js";
+import { createId } from "../utils/ids.js";
+import { sha256 } from "../utils/hashing.js";
+import { now } from "../utils/dates.js";
+import { AppError } from "../utils/errors.js";
+import { providerEventId, webhookPhoneNumberId } from "../channels/whatsapp/whatsapp.normalizer.js";
+
+export class WebhookService {
+  constructor({ store, orgId, whatsappAdapter, channelManager, channelAccounts, contacts, conversations, messages, domain, assignment, media, ai, notifications, marketing = null, legacyDualWrite, allowUnsigned = false }) {
+    this.store = store;
+    this.orgId = orgId;
+    this.whatsappAdapter = whatsappAdapter;
+    this.channelManager = channelManager;
+    this.channelAccounts = channelAccounts;
+    this.contacts = contacts;
+    this.conversations = conversations;
+    this.messages = messages;
+    this.domain = domain;
+    this.assignment = assignment;
+    this.media = media;
+    this.ai = ai;
+    this.notifications = notifications;
+    this.marketing = marketing;
+    this.legacyDualWrite = legacyDualWrite;
+    this.allowUnsigned = allowUnsigned;
+  }
+
+  verifyChallenge(query, expectedToken) {
+    if (query["hub.mode"] === "subscribe" && query["hub.verify_token"] === expectedToken) {
+      return String(query["hub.challenge"] || "");
+    }
+    throw new AppError("WEBHOOK_VERIFICATION_FAILED", "Webhook verification failed", 403);
+  }
+
+  async receiveWhatsApp({ rawBody, payload, signature }) {
+    const verified = await this.whatsappAdapter.verifyWebhook({ rawBody, signature, allowUnsigned: this.allowUnsigned });
+    if (!verified) throw new AppError("INVALID_WEBHOOK_SIGNATURE", "Invalid webhook signature", 401);
+    const payloadHash = sha256(rawBody);
+    const eventProviderId = providerEventId(payload, payloadHash);
+    const keyId = sha256(`${this.orgId}:META:WHATSAPP:${eventProviderId}:${payloadHash}`);
+    const webhookEventId = createId("webhookEvent");
+    const timestamp = now();
+    const event = {
+      webhookEventId,
+      orgId: this.orgId,
+      provider: "META",
+      channel: "WHATSAPP",
+      channelAccountId: null,
+      phoneNumberId: webhookPhoneNumberId(payload),
+      providerEventId: eventProviderId,
+      payloadHash,
+      payload,
+      processingStatus: "PENDING",
+      attemptCount: 0,
+      lastError: null,
+      receivedAt: timestamp,
+      processedAt: null,
+      lockedAt: null,
+      lockedBy: null
+    };
+    return this.store.runTransaction(async (tx) => {
+      const existing = await tx.get(COLLECTIONS.idempotencyKeys, keyId);
+      if (existing) return { duplicate: true, webhookEventId: existing.webhookEventId };
+      tx.create(COLLECTIONS.webhookEvents, webhookEventId, event);
+      tx.create(COLLECTIONS.idempotencyKeys, keyId, {
+        orgId: this.orgId,
+        kind: "WEBHOOK",
+        providerEventId: eventProviderId,
+        payloadHash,
+        webhookEventId,
+        createdAt: timestamp
+      });
+      return { duplicate: false, webhookEventId };
+    });
+  }
+
+  async processEvent(webhookEventId) {
+    const record = await this.store.get(COLLECTIONS.webhookEvents, webhookEventId);
+    if (!record || record.orgId !== this.orgId) throw new AppError("WEBHOOK_EVENT_NOT_FOUND", "Webhook event not found", 404);
+    if (record.processingStatus === "PROCESSED") return { duplicate: true };
+    const account = await this.channelAccounts.resolveInbound(this.orgId, record.phoneNumberId);
+    const normalized = await this.channelManager.normalizeWebhook(account, record.payload);
+    const results = [];
+    for (const event of normalized) {
+      if (event.kind === "STATUS") {
+        results.push(await this.messages.updateProviderStatus(
+          this.orgId,
+          event.providerMessageId,
+          event.status,
+          event.error,
+          event.providerTimestamp,
+          event.metadata
+        ));
+        continue;
+      }
+      const { contact } = await this.contacts.resolveInboundIdentity({
+        orgId: this.orgId,
+        channel: "WHATSAPP",
+        externalUserId: event.externalUserId,
+        channelAccountId: account.channelAccountId || account.id,
+        profileName: event.profileName
+      });
+      if (!contact.assignedTo && this.assignment) {
+        const assignedTo = await this.assignment.nextSalesUser(this.orgId);
+        if (assignedTo) {
+          await this.contacts.update(this.orgId, contact.contactId, { assignedTo });
+          contact.assignedTo = assignedTo;
+        }
+      }
+      const lead = await this.domain.ensureLead({
+        orgId: this.orgId,
+        contact,
+        source: "WHATSAPP"
+      });
+      const conversation = await this.conversations.findOrCreate({
+        orgId: this.orgId,
+        contactId: contact.contactId,
+        leadId: lead.leadId,
+        channel: "WHATSAPP",
+        channelAccountId: account.channelAccountId || account.id,
+        assignedTo: lead.assignedTo
+      });
+      if (!lead.conversationId) {
+        await this.store.update(COLLECTIONS.leads, lead.leadId, { conversationId: conversation.conversationId, updatedAt: now() });
+      }
+      const quotedMessage = event.replyToProviderMessageId
+        ? await this.messages.findByProviderId(this.orgId, event.replyToProviderMessageId)
+        : null;
+      const saved = await this.messages.createInbound({
+        orgId: this.orgId,
+        conversationId: conversation.conversationId,
+        contactId: contact.contactId,
+        leadId: lead.leadId,
+        channel: "WHATSAPP",
+        channelAccountId: account.channelAccountId || account.id,
+        type: event.type,
+        text: event.text,
+        providerMessageId: event.providerMessageId,
+        providerTimestamp: event.providerTimestamp,
+        senderId: event.externalUserId,
+        replyToMessageId: quotedMessage?.messageId || quotedMessage?.id || null,
+        metadata: {
+          ...event.metadata,
+          ...(event.media ? {
+            providerMedia: event.media,
+            mediaArchiveStatus: "PENDING",
+            mediaArchiveError: null
+          } : {})
+        }
+      });
+      if (!saved.duplicate) {
+        const receivedAt = now();
+        const serviceWindowExpiresAt = new Date(receivedAt.getTime() + 24 * 60 * 60 * 1000);
+        const freeEntryWindowExpiresAt = event.metadata?.referral
+          ? new Date(receivedAt.getTime() + 72 * 60 * 60 * 1000)
+          : null;
+        const windowPatch = {
+          lastUserMessageAt: receivedAt,
+          serviceWindowExpiresAt,
+          ...(freeEntryWindowExpiresAt ? { freeEntryWindowExpiresAt } : {}),
+          updatedAt: receivedAt
+        };
+        await Promise.all([
+          this.store.update(COLLECTIONS.leads, lead.leadId, windowPatch),
+          this.store.update(COLLECTIONS.contacts, contact.contactId, windowPatch)
+        ]);
+      }
+      let marketingResult = null;
+      if (!saved.duplicate) {
+        await this.legacyDualWrite.saveInbound({
+          channel: "WHATSAPP",
+          senderId: event.externalUserId,
+          text: event.text,
+          providerMessageId: event.providerMessageId
+        });
+        if (this.marketing) {
+          marketingResult = await this.marketing.handleInbound({
+            orgId: this.orgId,
+            contactId: contact.contactId,
+            message: saved.message
+          });
+        }
+      } else if (this.marketing) {
+        marketingResult = await this.marketing.handleInbound({
+          orgId: this.orgId,
+          contactId: contact.contactId,
+          message: saved.message
+        });
+      }
+      if (event.media && !saved.duplicate) {
+        try {
+          await this.media.downloadAndStore({
+            orgId: this.orgId,
+            account,
+            contactId: contact.contactId,
+            conversationId: conversation.conversationId,
+            messageId: saved.message.messageId,
+            media: event.media
+          });
+        } catch (error) {
+          await this.media.markMessageMediaState(
+            this.orgId,
+            saved.message.messageId,
+            "RETRY",
+            error.message
+          ).catch(() => {});
+          const automationJobId = createId("automationJob");
+          await this.store.create(COLLECTIONS.automationJobs, automationJobId, {
+            automationJobId,
+            orgId: this.orgId,
+            type: "MEDIA_DOWNLOAD",
+            status: "PENDING",
+            attemptCount: 0,
+            nextAttemptAt: now(),
+            payload: {
+              channelAccountId: account.channelAccountId || account.id,
+              contactId: contact.contactId,
+              conversationId: conversation.conversationId,
+              messageId: saved.message.messageId,
+              media: event.media
+            },
+            lastError: { message: error.message.slice(0, 300) },
+            createdAt: now(),
+            updatedAt: now()
+          });
+          await this.notifications.create(this.orgId, {
+            type: "MEDIA_DOWNLOAD_FAILED",
+            severity: "ERROR",
+            title: "Inbound media could not be archived",
+            entityType: "MESSAGE",
+            entityId: saved.message.messageId,
+            metadata: { providerMediaId: event.media.providerMediaId, automationJobId, error: error.message.slice(0, 300) }
+          });
+        }
+      }
+      let aiResult;
+      if (marketingResult?.optedOut) {
+        await this.messages.queueOutbound({
+          orgId: this.orgId,
+          conversationId: conversation.conversationId,
+          text: "You have been unsubscribed from RX Design Hub marketing messages. Reply START if you want to opt in again.",
+          type: "TEXT",
+          metadata: { consentConfirmation: "OPTED_OUT" },
+          senderType: "SYSTEM",
+          senderId: "CONSENT_MANAGER",
+          idempotencyKey: `OPT_OUT_CONFIRMATION:${saved.message.messageId}`
+        });
+        aiResult = { skipped: true, reason: "Customer opted out; AI reply suppressed" };
+      } else if (saved.duplicate) {
+        aiResult = { skipped: true, reason: "DUPLICATE_MESSAGE" };
+      } else {
+        aiResult = await this.ai.processInbound({
+          orgId: this.orgId,
+          conversationId: conversation.conversationId,
+          message: saved.message
+        });
+      }
+      let marketingProspect = null;
+      if (!saved.duplicate && marketingResult?.campaignReply && this.marketing) {
+        try {
+          marketingProspect = await this.marketing.recordRepliedProspect({
+            orgId: this.orgId,
+            contactId: contact.contactId,
+            message: saved.message,
+            campaignContext: marketingResult,
+            aiResult
+          });
+        } catch (error) {
+          await this.notifications.create(this.orgId, {
+            type: "MARKETING_REPLY_CLASSIFICATION_FAILED",
+            severity: "WARNING",
+            title: "Campaign reply needs manual classification",
+            entityType: "CONTACT",
+            entityId: contact.contactId,
+            metadata: { messageId: saved.message.messageId, error: error.message.slice(0, 300) }
+          });
+        }
+      }
+      results.push({ saved, aiResult, marketingResult, marketingProspect });
+    }
+    await this.store.update(COLLECTIONS.webhookEvents, webhookEventId, {
+      channelAccountId: account.channelAccountId || account.id,
+      processingStatus: "PROCESSED",
+      processedAt: now(),
+      lockedAt: null,
+      lockedBy: null,
+      lastError: null
+    });
+    return { duplicate: false, results };
+  }
+}
