@@ -12,6 +12,7 @@ import { errorHandler } from "./middleware/error-handler.js";
 import { apiRoutes } from "./routes/index.js";
 import { webhooksRoutes } from "./routes/webhooks.routes.js";
 import { authRoutes } from "./routes/auth.routes.js";
+import { integrationsRoutes } from "./routes/integrations.routes.js";
 import { requireAdminDevice, requireApprovedDevice, requireDashboardKey } from "../middleware/auth.js";
 import { devicesRouter } from "../routes/devices.js";
 import { leadsRouter } from "../routes/leads.js";
@@ -42,7 +43,7 @@ export function createApp(options = {}) {
       },
       credentials: true,
       methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-      allowedHeaders: ["authorization", "content-type", "idempotency-key", "x-request-id", "x-dashboard-key", "x-device-code", "x-device-user", "x-device-role", "x-filename"]
+      allowedHeaders: ["authorization", "content-type", "idempotency-key", "x-request-id", "x-dashboard-key", "x-device-code", "x-device-user", "x-device-role", "x-filename", "x-process-sync-secret"]
     })
   );
   app.use(
@@ -59,19 +60,19 @@ export function createApp(options = {}) {
     res.json({
       status: "ok",
       service: "rx-communication-crm",
-      version: "2.3.2",
+      version: "2.4.0",
       endpoints: { health: "/health", readiness: "/ready", api: "/api/v1" },
       timestamp: new Date().toISOString()
     });
   });
 
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", service: "rx-communication-crm", version: "2.3.2", timestamp: new Date().toISOString() });
+    res.json({ status: "ok", service: "rx-communication-crm", version: "2.4.0", timestamp: new Date().toISOString() });
   });
   app.get("/ready", async (_req, res) => {
     try {
       await container.store.get("systemSettings", "readiness");
-      res.json({ status: "ready", service: "rx-communication-crm", version: "2.3.2", timestamp: new Date().toISOString() });
+      res.json({ status: "ready", service: "rx-communication-crm", version: "2.4.0", timestamp: new Date().toISOString() });
     } catch {
       res.status(503).json({ status: "not_ready", service: "rx-communication-crm", timestamp: new Date().toISOString() });
     }
@@ -82,6 +83,7 @@ export function createApp(options = {}) {
   app.use("/webhook", webhookRateLimit, webhookRouter);
 
   app.use("/api/v1/auth", authRateLimit, authRoutes(container));
+  app.use("/api/v1/integrations", apiRateLimit, integrationsRoutes(container));
   const authenticate = options.authenticate || createAuthenticate({ auth: container.auth, store: container.store, otpAuth: container.otpAuth });
   app.use("/api/v1", apiRateLimit, apiRoutes(container, authenticate));
 

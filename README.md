@@ -93,7 +93,7 @@ Use `POST /api/v1/whatsapp/templates/sync` after deployment. The complete enviro
 
 ## Daily WhatsApp workspace
 
-Backend v2.3.2 and the matching frontend v1.5 add a cached, incremental shared inbox on top of the official Cloud API:
+Backend v2.4.0 and the matching frontend v1.5 add a cached, incremental shared inbox on top of the official Cloud API:
 
 - text, images, video, documents, audio/voice notes, locations, contact cards, interactive reply buttons, quoted replies, reactions, and clickable links;
 - delivery/read states, unread counters, incremental polling, desktop alerts, built-in/custom quick replies, and internal notes;
@@ -147,6 +147,24 @@ normalizes phones and money expressions, and displays warnings. The commit step
 creates or reuses the permanent client profile, creates its historical order and
 payments, and stores an idempotency key so importing the same row twice does not
 create duplicates. Only `OWNER` and `ADMIN` users can import.
+
+## Process Management order sync
+
+`POST /api/v1/integrations/process-orders` accepts signed server-to-server
+updates from the RX Process Management app. Configure the same random 32+
+character value as `PROCESS_ORDER_SYNC_SECRET` on Render and
+`CRM_ORDER_SYNC_SECRET` on the Process Management Vercel project. The Vercel
+project also needs:
+
+```text
+CRM_ORDER_SYNC_URL=https://YOUR_RENDER_HOST/api/v1/integrations/process-orders
+```
+
+The integration verifies the source order in the Process Management Firebase
+project before sending it. In CRM it reuses a client by normalized phone,
+creates a client only when needed, and deterministically upserts the order so
+retries or later edits never create duplicate orders. A newly linked order also
+stops active drip enrollments for that client as converted.
 
 ## API and operations documentation
 

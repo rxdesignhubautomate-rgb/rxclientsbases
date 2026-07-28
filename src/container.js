@@ -36,6 +36,7 @@ import { TemplateRegistryService } from "./services/template-registry.service.js
 import { SmartMessageService } from "./services/smart-message.service.js";
 import { CampaignWorker } from "./workers/campaign.worker.js";
 import { QuickReplyService } from "./services/quick-reply.service.js";
+import { ProcessOrderSyncService } from "./services/process-order-sync.service.js";
 
 let singleton;
 
@@ -110,6 +111,12 @@ export function createContainer(overrides = {}) {
       jobLockMinutes: env.CAMPAIGN_JOB_LOCK_MINUTES,
       maxRetries: env.CAMPAIGN_MAX_RETRIES
     }
+  });
+  const processOrderSync = overrides.processOrderSync || new ProcessOrderSyncService({
+    store,
+    contacts,
+    marketing,
+    audit
   });
   const media = new MediaService({
     store,
@@ -216,6 +223,7 @@ export function createContainer(overrides = {}) {
     templateRegistry,
     smartMessages,
     marketing,
+    processOrderSync,
     media,
     documents,
     ai,

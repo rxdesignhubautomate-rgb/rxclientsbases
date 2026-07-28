@@ -23,6 +23,7 @@ const schema = z.object({
   FIREBASE_PRIVATE_KEY: z.string().optional(),
   FIREBASE_STORAGE_BUCKET: z.string().optional(),
   FIREBASE_WEB_API_KEY: z.string().optional(),
+  PROCESS_ORDER_SYNC_SECRET: z.string().min(32).optional(),
   META_APP_SECRET: z.string().optional(),
   META_VERIFY_TOKEN: z.string().optional(),
   META_ACCESS_TOKEN: z.string().optional(),
