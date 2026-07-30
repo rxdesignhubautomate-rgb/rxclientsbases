@@ -69,7 +69,20 @@ export class TemplateRegistryService {
 
   async assertApproved(orgId, templateOrKey) {
     const template = typeof templateOrKey === "string" ? this.resolve(templateOrKey) : templateOrKey;
-    const record = await this.getStatus(orgId, template.name, template.language);
+    let record = await this.getStatus(orgId, template.name, template.language);
+    let syncError = null;
+    if (!record) {
+      // A deploy, stale browser state, or a regional Meta language code must not
+      // force an admin to keep pressing "Sync from Meta". Refresh once on demand
+      // and then re-read the durable registry before deciding that it is absent.
+      try {
+        await this.syncFromMeta(orgId, { source: "SEND_TIME_AUTO_SYNC" });
+      } catch (error) {
+        syncError = error;
+      }
+      record = await this.getStatus(orgId, template.name, template.language);
+    }
+    if (!record && syncError) throw syncError;
     if (!record) throw new ConflictError(`Sync Meta templates before sending ${template.name}`);
     if (record.status !== "APPROVED") throw new ConflictError(`Meta template ${template.name} is ${record.status || "UNKNOWN"}`);
     return record;

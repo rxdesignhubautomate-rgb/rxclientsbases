@@ -191,6 +191,29 @@ describe("Meta template registry", () => {
     });
   });
 
+  it("automatically refreshes Meta once when an approved template is missing locally", async () => {
+    let calls = 0;
+    const service = new TemplateRegistryService({
+      store: new MemoryStore(),
+      businessAccountId: "123456789012345",
+      whatsappAdapter: {
+        listMessageTemplates: async () => {
+          calls += 1;
+          return [
+            { id: "T1", name: "1_marketing", language: "en_US", category: "MARKETING", status: "APPROVED" }
+          ];
+        }
+      }
+    });
+
+    await expect(service.assertApproved("RXDH", "interest_followup")).resolves.toMatchObject({
+      name: "1_marketing",
+      language: "en_US",
+      status: "APPROVED"
+    });
+    expect(calls).toBe(1);
+  });
+
   it("keeps multiple regional languages ambiguous until an exact override is configured", async () => {
     const service = new TemplateRegistryService({
       store: new MemoryStore(),
