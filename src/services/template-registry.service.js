@@ -90,21 +90,24 @@ export class TemplateRegistryService {
 
     const syncedAt = now();
     const items = [...new Map(remoteTemplates.map((template) => {
+      const componentSnapshot = serializeMetaComponents(template.components);
       const item = {
-      id: templateDocumentId(orgId, template.name, template.language),
-      data: {
-        templateId: String(template.id || ""),
-        orgId,
-        name: String(template.name || ""),
-        language: String(template.language || "en"),
-        category: String(template.category || "UNKNOWN").toUpperCase(),
-        status: String(template.status || "UNKNOWN").toUpperCase(),
-        qualityScore: template.quality_score?.score || template.quality_score || null,
-        rejectedReason: template.rejected_reason || null,
-        components: Array.isArray(template.components) ? template.components : [],
-        lastSyncedAt: syncedAt,
-        updatedAt: syncedAt
-      }
+        id: templateDocumentId(orgId, template.name, template.language),
+        data: {
+          templateId: String(template.id || ""),
+          orgId,
+          name: String(template.name || ""),
+          language: String(template.language || "en"),
+          category: String(template.category || "UNKNOWN").toUpperCase(),
+          status: String(template.status || "UNKNOWN").toUpperCase(),
+          qualityScore: template.quality_score?.score || template.quality_score || null,
+          rejectedReason: template.rejected_reason || null,
+          componentCount: componentSnapshot.count,
+          componentTypes: componentSnapshot.types,
+          componentsJson: componentSnapshot.json,
+          lastSyncedAt: syncedAt,
+          updatedAt: syncedAt
+        }
       };
       return [item.id, item];
     })).values()];
@@ -297,6 +300,21 @@ function templateStorageError(error) {
     safeMessage = `Meta templates were fetched, but the CRM could not save them to Firestore: ${message}`;
   }
   return new AppError("TEMPLATE_REGISTRY_SAVE_FAILED", safeMessage, 424, { provider: "FIRESTORE", providerCode: code });
+}
+
+function serializeMetaComponents(value) {
+  const components = Array.isArray(value) ? value : [];
+  let json;
+  try {
+    json = JSON.stringify(components);
+  } catch {
+    json = "[]";
+  }
+  return {
+    count: components.length,
+    types: [...new Set(components.map((component) => String(component?.type || "UNKNOWN").toUpperCase()))],
+    json: json.slice(0, 200_000)
+  };
 }
 
 function safeOperationalMessage(error) {

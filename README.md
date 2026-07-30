@@ -93,7 +93,7 @@ Use `POST /api/v1/whatsapp/templates/sync` after deployment. The complete enviro
 
 ## Daily WhatsApp workspace
 
-Backend v2.5.3 and the matching frontend v1.5 add a cached, incremental shared inbox on top of the official Cloud API:
+Backend v2.5.4 and the matching frontend v1.5 add a cached, incremental shared inbox on top of the official Cloud API:
 
 - text, images, video, documents, audio/voice notes, locations, contact cards, interactive reply buttons, quoted replies, reactions, and clickable links;
 - delivery/read states, unread counters, incremental polling, desktop alerts, built-in/custom quick replies, and internal notes;

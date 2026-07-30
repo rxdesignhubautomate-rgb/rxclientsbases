@@ -420,7 +420,7 @@ export function createControllers(container) {
     system: {
       info: wrap(async (req, res) => sendData(res, {
         service: "rx-communication-crm",
-        version: "2.5.3",
+        version: "2.5.4",
         orgId: org(req),
         features: {
           legacyDualWrite: c.env.ENABLE_LEGACY_DUAL_WRITE,

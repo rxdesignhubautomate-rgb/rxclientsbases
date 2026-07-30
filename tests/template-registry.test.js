@@ -97,6 +97,42 @@ describe("Meta template registry", () => {
     });
   });
 
+  it("stores Meta component examples without Firestore-invalid nested arrays", async () => {
+    const store = new MemoryStore();
+    const service = new TemplateRegistryService({
+      store,
+      businessAccountId: "123456789012345",
+      whatsappAdapter: {
+        listMessageTemplates: async () => [
+          {
+            id: "T1",
+            name: "rx_order_confirmation",
+            language: "en",
+            category: "UTILITY",
+            status: "APPROVED",
+            components: [
+              {
+                type: "BODY",
+                text: "Hello {{1}}, order {{2}} is confirmed.",
+                example: { body_text: [["Amit", "ORDER-1"]] }
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    await service.syncFromMeta("RXDH");
+    const saved = await service.getStatus("RXDH", "rx_order_confirmation", "en");
+
+    expect(saved).toMatchObject({
+      componentCount: 1,
+      componentTypes: ["BODY"]
+    });
+    expect(saved.components).toBeUndefined();
+    expect(saved.componentsJson).toContain('"body_text":[["Amit","ORDER-1"]]');
+  });
+
   it("reports an actionable error when the Meta token is expired", async () => {
     const service = new TemplateRegistryService({
       store: new MemoryStore(),
