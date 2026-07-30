@@ -89,4 +89,17 @@ export class FirestoreStore {
     }
     return changed;
   }
+
+  async batchDelete(collection, ids, chunkSize = 400) {
+    let changed = 0;
+    for (let index = 0; index < ids.length; index += chunkSize) {
+      const batch = this.db.batch();
+      for (const id of ids.slice(index, index + chunkSize)) {
+        batch.delete(this.db.collection(collection).doc(id));
+        changed += 1;
+      }
+      await batch.commit();
+    }
+    return changed;
+  }
 }

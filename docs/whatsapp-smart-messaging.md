@@ -186,6 +186,26 @@ Existing `messages`, `outbox`, `contacts`, `leads`, `marketingCampaigns`, and `c
 5. Confirm `META_APP_SECRET` is present so `X-Hub-Signature-256` is verified.
 6. Copy the WABA ID into `META_WHATSAPP_BUSINESS_ACCOUNT_ID`, redeploy, and sync templates.
 
+### Template-sync diagnostics
+
+Backend v2.5.2 returns an actionable error instead of a generic `Internal server error` when Meta rejects a sync. The message distinguishes:
+
+- expired or invalid `META_ACCESS_TOKEN`;
+- missing System User access or `whatsapp_business_management` / `whatsapp_business_messaging`;
+- a Business ID or Phone Number ID entered instead of the WABA ID;
+- approved templates belonging to another WABA;
+- exact template-name or language-code mismatches.
+
+The WABA ID is numeric and comes from WhatsApp Manager, **Account tools -> Phone numbers -> WhatsApp Business Account ID**. Templates cannot be copied between WABAs by the API; create/approve them in the WABA used by Render.
+
+If Meta uses a different language code, keep the name and language together in the override. For example:
+
+```env
+WHATSAPP_TEMPLATE_OVERRIDES_JSON={"order_confirmation":{"name":"rx_order_confirmation","language":"en_US"}}
+```
+
+After changing either `META_ACCESS_TOKEN`, `META_WHATSAPP_BUSINESS_ACCOUNT_ID`, or `WHATSAPP_TEMPLATE_OVERRIDES_JSON`, redeploy Render before clicking **Sync from Meta** again.
+
 ## Local verification
 
 ```bash

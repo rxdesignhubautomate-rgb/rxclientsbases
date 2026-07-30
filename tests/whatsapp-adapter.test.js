@@ -99,4 +99,37 @@ describe("WhatsApp adapter webhook verification", () => {
       caption: "Sample image"
     });
   });
+
+  it("retries template listing without quality_score when Meta rejects that field", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: {
+            message: "Tried accessing nonexisting field (quality_score)",
+            code: 100,
+            type: "OAuthException"
+          }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: [{ id: "T1", name: "rx_order_confirmation", language: "en", category: "UTILITY", status: "APPROVED" }]
+        })
+      });
+    const adapter = new WhatsAppMetaAdapter({
+      accessToken: "test-token",
+      appSecret: "secret",
+      graphApiVersion: "v25.0",
+      fetchImpl
+    });
+
+    await expect(adapter.listMessageTemplates({ businessAccountId: "123456789012345" }))
+      .resolves.toHaveLength(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[0][0]).toContain("quality_score");
+    expect(fetchImpl.mock.calls[1][0]).not.toContain("quality_score");
+  });
 });

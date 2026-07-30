@@ -78,6 +78,11 @@ export class MemoryStore {
     for (const item of items) await this.set(collection, item.id, item.data, { merge: true });
     return items.length;
   }
+
+  async batchDelete(collection, ids) {
+    for (const id of ids) this.bucket(collection).delete(id);
+    return ids.length;
+  }
 }
 
 function compare(actual, op, expected) {

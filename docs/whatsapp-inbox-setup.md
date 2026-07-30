@@ -15,7 +15,7 @@ Open **WhatsApp Manager → Account tools → Message templates → Create templ
 ### `rx_order_confirmation`
 
 ```text
-Hello {{1}}, your order {{2}} has been confirmed. Order value: {{3}}.
+Hello {{1}}, your order {{2}} has been confirmed. Order value: {{3}}. We will share the next update here.
 ```
 
 Sample variables: `Rahul`, `ORD-1025`, `INR 12,500`.

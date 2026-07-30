@@ -113,10 +113,24 @@ export class WhatsAppMetaAdapter extends BaseChannelAdapter {
   async listMessageTemplates({ businessAccountId, limit = 100 }) {
     const templates = [];
     let after = null;
+    let includeQualityScore = true;
     for (let page = 0; page < 20; page += 1) {
-      const query = new URLSearchParams({ limit: String(limit), fields: "id,name,language,category,status,quality_score,components" });
+      const fields = includeQualityScore
+        ? "id,name,language,category,status,quality_score,components"
+        : "id,name,language,category,status,components";
+      const query = new URLSearchParams({ limit: String(limit), fields });
       if (after) query.set("after", after);
-      const response = await this.request(`/${businessAccountId}/message_templates?${query.toString()}`, { method: "GET" });
+      let response;
+      try {
+        response = await this.request(`/${businessAccountId}/message_templates?${query.toString()}`, { method: "GET" });
+      } catch (error) {
+        if (page === 0 && includeQualityScore && /quality_score/i.test(String(error?.message))) {
+          includeQualityScore = false;
+          page -= 1;
+          continue;
+        }
+        throw error;
+      }
       templates.push(...(response.data || []));
       after = response.paging?.cursors?.after || null;
       if (!after || !response.paging?.next) break;
