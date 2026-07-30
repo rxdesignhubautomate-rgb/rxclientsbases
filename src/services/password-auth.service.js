@@ -2,6 +2,7 @@ import { ulid } from "ulid";
 import { COLLECTIONS } from "../config/constants.js";
 import { AppError, ForbiddenError } from "../utils/errors.js";
 import { parseAccounts } from "./otp-auth.service.js";
+import { resolveClientScope } from "../utils/client-scope.js";
 
 const SALES_PERMISSIONS = [
   "dashboard.read",
@@ -111,6 +112,7 @@ export class PasswordAuthService {
       email: account.email,
       name: account.name,
       role: account.role,
+      clientScope: resolveClientScope(account),
       active: true,
       permissions: account.role === "OWNER" || account.role === "ADMIN" ? ["*"] : SALES_PERMISSIONS,
       updatedAt: now,
@@ -132,7 +134,13 @@ function tokenResponse(payload, user) {
     accessToken: payload.idToken,
     refreshToken: payload.refreshToken,
     expiresInSeconds: Number(payload.expiresIn || 3600),
-    user: { email: user.email, name: user.name, role: user.role }
+    user: {
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      userId: user.userId || user.id,
+      clientScope: resolveClientScope(user)
+    }
   };
 }
 

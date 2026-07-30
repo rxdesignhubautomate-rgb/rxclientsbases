@@ -14,7 +14,7 @@ import {
 
 export function messagePolicyRoutes(container) {
   const router = express.Router();
-  router.use(authorizeRole("OWNER", "ADMIN"));
+  router.use(authorizeRole("OWNER", "ADMIN", "SALES"));
 
   router.post("/message/decide", validate(smartMessageSchema), wrap(async (req, res) => {
     const evaluated = await container.smartMessages.decide(req.auth.orgId, req.body);
@@ -34,7 +34,7 @@ export function messagePolicyRoutes(container) {
   router.get("/whatsapp/templates/configured", wrap(async (_req, res) => {
     return sendData(res, container.templateRegistry.listConfigured());
   }));
-  router.post("/whatsapp/templates/sync", wrap(async (req, res) => {
+  router.post("/whatsapp/templates/sync", authorizeRole("OWNER", "ADMIN"), wrap(async (req, res) => {
     return sendData(res, await container.templateRegistry.syncFromMeta(req.auth.orgId, req.auth));
   }));
 
@@ -42,19 +42,19 @@ export function messagePolicyRoutes(container) {
     return sendData(res, await container.marketing.createCampaign(req.auth.orgId, req.body, req.auth), 201);
   }));
   router.get("/campaigns", wrap(async (req, res) => {
-    return sendList(res, await container.marketing.listCampaigns(req.auth.orgId, { ...listQuery(req.query), status: req.query.status }));
+    return sendList(res, await container.marketing.listCampaigns(req.auth.orgId, { ...listQuery(req.query), status: req.query.status, actor: req.auth }));
   }));
   router.get("/campaigns/:campaignId", wrap(async (req, res) => {
-    return sendData(res, await container.marketing.getCampaign(req.auth.orgId, req.params.campaignId, { includeEnrollments: true }));
+    return sendData(res, await container.marketing.getCampaign(req.auth.orgId, req.params.campaignId, { includeEnrollments: true, actor: req.auth }));
   }));
   router.get("/campaigns/:campaignId/stats", wrap(async (req, res) => {
-    const campaign = await container.marketing.getCampaign(req.auth.orgId, req.params.campaignId);
+    const campaign = await container.marketing.getCampaign(req.auth.orgId, req.params.campaignId, { actor: req.auth });
     return sendData(res, { campaignId: campaign.campaignId, status: campaign.status, lifecycleStatus: campaign.lifecycleStatus, stats: campaign.stats || {} });
   }));
   router.post("/campaigns/:campaignId/submit", wrap(async (req, res) => {
     return sendData(res, await container.marketing.submitCampaign(req.auth.orgId, req.params.campaignId, req.auth));
   }));
-  router.post("/campaigns/:campaignId/approve", wrap(async (req, res) => {
+  router.post("/campaigns/:campaignId/approve", authorizeRole("OWNER", "ADMIN"), wrap(async (req, res) => {
     return sendData(res, await container.marketing.approveCampaign(req.auth.orgId, req.params.campaignId, req.auth));
   }));
   router.post("/campaigns/:campaignId/schedule", validate(campaignScheduleSchema), wrap(async (req, res) => {
@@ -72,7 +72,7 @@ export function messagePolicyRoutes(container) {
   router.post("/campaigns/:campaignId/cancel", wrap(async (req, res) => {
     return sendData(res, await container.marketing.cancelCampaign(req.auth.orgId, req.params.campaignId, req.auth));
   }));
-  router.post("/workers/campaign/run", wrap(async (_req, res) => {
+  router.post("/workers/campaign/run", authorizeRole("OWNER", "ADMIN"), wrap(async (_req, res) => {
     return sendData(res, { processed: await container.marketing.processDue(container.env.CAMPAIGN_BATCH_SIZE) });
   }));
 

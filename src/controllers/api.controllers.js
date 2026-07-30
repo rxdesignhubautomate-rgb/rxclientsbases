@@ -5,6 +5,7 @@ import { COLLECTIONS } from "../config/constants.js";
 import { now } from "../utils/dates.js";
 import { ConflictError } from "../utils/errors.js";
 import { ensureWhatsAppChannelAccount } from "../bootstrap/whatsapp-channel-account.js";
+import { CLIENT_SCOPES, relationshipTypesForScope } from "../utils/client-scope.js";
 
 export function createControllers(container) {
   const c = container;
@@ -13,10 +14,31 @@ export function createControllers(container) {
   const booleanQuery = (value) => value === "true" ? true : value === "false" ? false : undefined;
   const scopedOptions = (req) => {
     const options = listQuery(req.query);
-    if (req.auth.role === "SALES") options.assignedTo = req.auth.userId;
+    if (req.auth.role === "SALES") {
+      const relationshipTypes = relationshipTypesForScope(req.auth.clientScope);
+      if (relationshipTypes.length) {
+        options.relationshipTypes = relationshipTypes;
+        options.relationshipType = null;
+        options.assignedTo = null;
+      } else {
+        options.assignedTo = req.auth.userId;
+      }
+    }
     return options;
   };
-  const checkAssigned = (req, entity) => enforceAssignment(entity)(req);
+  const checkAssigned = async (req, entity) => {
+    let scopedEntity = entity;
+    if (
+      req.auth.role === "SALES"
+      && req.auth.clientScope !== CLIENT_SCOPES.ASSIGNED
+      && entity?.contactId
+      && !entity.relationshipType
+      && !entity.contactRelationshipType
+    ) {
+      scopedEntity = await c.contacts.get(org(req), entity.contactId);
+    }
+    enforceAssignment(scopedEntity)(req);
+  };
   const resolveOrderReference = async (orgId, contactId, values = {}) => {
     if (values.order_id) return values.order_id;
     const reference = String(values.order_reference || "").trim();
@@ -71,41 +93,48 @@ export function createControllers(container) {
   return {
     contacts: {
       create: wrap(async (req, res) => {
+        const scopedTypes = relationshipTypesForScope(req.auth.clientScope);
         const input = req.auth.role === "SALES"
-          ? { ...req.body, assignedTo: req.auth.userId, salesPersonName: req.body.salesPersonName || req.user?.name || "" }
+          ? {
+            ...req.body,
+            relationshipType: scopedTypes[0] || req.body.relationshipType,
+            assignedTo: req.auth.userId,
+            salesPersonName: req.body.salesPersonName || req.user?.name || ""
+          }
           : req.body;
         return sendData(res, await c.contacts.create(org(req), input, actor(req)), 201);
       }),
       list: wrap(async (req, res) => sendList(res, await c.contacts.list(org(req), scopedOptions(req)))),
+      count: wrap(async (req, res) => sendData(res, await c.contacts.count(org(req), scopedOptions(req)))),
       get: wrap(async (req, res) => {
         const value = await c.contacts.get(org(req), req.params.contactId);
-        checkAssigned(req, value);
+        await checkAssigned(req, value);
         return sendData(res, value);
       }),
       overview: wrap(async (req, res) => {
         const value = await c.contacts.get(org(req), req.params.contactId);
-        checkAssigned(req, value);
+        await checkAssigned(req, value);
         return sendData(res, await c.contacts.overview(org(req), req.params.contactId));
       }),
       update: wrap(async (req, res) => {
         const value = await c.contacts.get(org(req), req.params.contactId);
-        checkAssigned(req, value);
+        await checkAssigned(req, value);
         return sendData(res, await c.contacts.update(org(req), req.params.contactId, req.body, actor(req)));
       }),
       merge: wrap(async (req, res) => sendData(res, await c.contacts.merge(org(req), req.params.contactId, req.body.duplicateContactId, actor(req)))),
       timeline: wrap(async (req, res) => {
         const value = await c.contacts.get(org(req), req.params.contactId);
-        checkAssigned(req, value);
+        await checkAssigned(req, value);
         return sendData(res, await c.timeline.forContact(org(req), req.params.contactId, Number(req.query.limit) || 100));
       }),
       addIdentity: wrap(async (req, res) => {
         const value = await c.contacts.get(org(req), req.params.contactId);
-        checkAssigned(req, value);
+        await checkAssigned(req, value);
         return sendData(res, await c.contacts.addIdentity(org(req), req.params.contactId, req.body, actor(req)), 201);
       }),
       listIdentities: wrap(async (req, res) => {
         const value = await c.contacts.get(org(req), req.params.contactId);
-        checkAssigned(req, value);
+        await checkAssigned(req, value);
         return sendList(res, await c.contacts.listIdentities(org(req), req.params.contactId));
       }),
       updateIdentity: wrap(async (req, res) => sendData(res, await c.contacts.updateIdentity(org(req), req.params.channelIdentityId, req.body, actor(req))))
@@ -122,7 +151,7 @@ export function createControllers(container) {
     conversations: {
       start: wrap(async (req, res) => {
         const contact = await c.contacts.get(org(req), req.body.contactId);
-        checkAssigned(req, contact);
+        await checkAssigned(req, contact);
         if (!contact.primaryPhone) throw new ConflictError("Client needs a valid phone number before starting WhatsApp chat");
         const account = await c.channelAccounts.resolveForSend(org(req), "WHATSAPP", null);
         const identities = await c.contacts.listIdentities(org(req), contact.contactId);
@@ -140,6 +169,7 @@ export function createControllers(container) {
           contactId: contact.contactId,
           channel: "WHATSAPP",
           channelAccountId: identity.channelAccountId || account.channelAccountId || account.id,
+          contactRelationshipType: contact.relationshipType || "PROSPECT",
           assignedTo: contact.assignedTo || (req.auth.role === "SALES" ? req.auth.userId : null)
         });
         return sendData(res, conversation, 201);
@@ -147,18 +177,18 @@ export function createControllers(container) {
       list: wrap(async (req, res) => sendList(res, await c.conversations.list(org(req), scopedOptions(req)))),
       get: wrap(async (req, res) => {
         const value = await c.conversations.get(org(req), req.params.conversationId);
-        checkAssigned(req, value);
+        await checkAssigned(req, value);
         return sendData(res, value);
       }),
       messages: wrap(async (req, res) => {
         const value = await c.conversations.get(org(req), req.params.conversationId);
-        checkAssigned(req, value);
+        await checkAssigned(req, value);
         const result = await c.messages.list(org(req), req.params.conversationId, listQuery(req.query));
         return sendList(res, await inboxMessages(org(req), result));
       }),
       action: (action) => wrap(async (req, res) => {
         const value = await c.conversations.get(org(req), req.params.conversationId);
-        checkAssigned(req, value);
+        await checkAssigned(req, value);
         return sendData(res, await c.conversations.transition(org(req), req.params.conversationId, action, req.body, actor(req)));
       }),
       note: wrap(async (req, res) => sendData(res, await c.messages.createInternalNote(org(req), req.params.conversationId, req.body.note, actor(req)), 201))
@@ -166,7 +196,7 @@ export function createControllers(container) {
     messages: {
       send: wrap(async (req, res) => {
         const conversation = await c.conversations.get(org(req), req.params.conversationId);
-        checkAssigned(req, conversation);
+        await checkAssigned(req, conversation);
         if (req.body.type === "TEMPLATE") {
           const template = c.templateRegistry.resolve(req.body.utilityTemplateId, "UTILITY");
           const values = req.body.templateVariables || {};
@@ -220,18 +250,18 @@ export function createControllers(container) {
       }),
       get: wrap(async (req, res) => {
         const message = await c.messages.get(org(req), req.params.messageId);
-        checkAssigned(req, await c.conversations.get(org(req), message.conversationId));
+        await checkAssigned(req, await c.conversations.get(org(req), message.conversationId));
         const enriched = await inboxMessages(org(req), { items: [message] });
         return sendData(res, enriched.items[0]);
       }),
       retry: wrap(async (req, res) => {
         const message = await c.messages.get(org(req), req.params.messageId);
-        checkAssigned(req, await c.conversations.get(org(req), message.conversationId));
+        await checkAssigned(req, await c.conversations.get(org(req), message.conversationId));
         return sendData(res, await c.messages.retry(org(req), req.params.messageId, actor(req)), 202);
       }),
       retryMedia: wrap(async (req, res) => {
         const message = await c.messages.get(org(req), req.params.messageId);
-        checkAssigned(req, await c.conversations.get(org(req), message.conversationId));
+        await checkAssigned(req, await c.conversations.get(org(req), message.conversationId));
         return sendData(res, await c.media.retryInboundMedia(org(req), req.params.messageId), 200);
       }),
       markRead: wrap(async (req, res) => sendData(res, await c.messages.markRead(org(req), req.params.messageId, actor(req))))
@@ -319,20 +349,26 @@ export function createControllers(container) {
       templates: wrap(async (_req, res) => sendData(res, c.marketing.listTemplates())),
       listReplied: wrap(async (req, res) => sendList(res, await c.marketing.listRepliedProspects(org(req), {
         ...listQuery(req.query),
+        relationshipTypes: scopedOptions(req).relationshipTypes,
+        actor: actor(req),
         temperature: req.query.temperature,
         important: booleanQuery(req.query.important),
         repeatMarketing: booleanQuery(req.query.repeatMarketing),
         assignedTo: req.query.assignedTo
       }))),
       updateReplied: wrap(async (req, res) => sendData(res, await c.marketing.updateRepliedProspect(org(req), req.params.contactId, req.body, actor(req)))),
-      consent: wrap(async (req, res) => sendData(res, await c.marketing.recordConsent(org(req), req.params.contactId, req.body, actor(req)))),
-      listAudiences: wrap(async (req, res) => sendList(res, await c.marketing.listAudiences(org(req), listQuery(req.query)))),
+      consent: wrap(async (req, res) => {
+        await checkAssigned(req, await c.contacts.get(org(req), req.params.contactId));
+        return sendData(res, await c.marketing.recordConsent(org(req), req.params.contactId, req.body, actor(req)));
+      }),
+      listAudiences: wrap(async (req, res) => sendList(res, await c.marketing.listAudiences(org(req), { ...listQuery(req.query), actor: actor(req) }))),
       createAudience: wrap(async (req, res) => sendData(res, await c.marketing.createAudience(org(req), req.body, actor(req)), 201)),
-      getAudience: wrap(async (req, res) => sendData(res, await c.marketing.getAudience(org(req), req.params.audienceId))),
+      createAudienceBatches: wrap(async (req, res) => sendData(res, await c.marketing.createSegmentBatches(org(req), req.body, actor(req)), 201)),
+      getAudience: wrap(async (req, res) => sendData(res, await c.marketing.getAudience(org(req), req.params.audienceId, { actor: actor(req) }))),
       updateAudience: wrap(async (req, res) => sendData(res, await c.marketing.updateAudience(org(req), req.params.audienceId, req.body, actor(req)))),
-      listCampaigns: wrap(async (req, res) => sendList(res, await c.marketing.listCampaigns(org(req), { ...listQuery(req.query), status: req.query.status }))),
+      listCampaigns: wrap(async (req, res) => sendList(res, await c.marketing.listCampaigns(org(req), { ...listQuery(req.query), status: req.query.status, actor: actor(req) }))),
       createCampaign: wrap(async (req, res) => sendData(res, await c.marketing.createCampaign(org(req), req.body, actor(req)), 201)),
-      getCampaign: wrap(async (req, res) => sendData(res, await c.marketing.getCampaign(org(req), req.params.campaignId, { includeEnrollments: true }))),
+      getCampaign: wrap(async (req, res) => sendData(res, await c.marketing.getCampaign(org(req), req.params.campaignId, { includeEnrollments: true, actor: actor(req) }))),
       launchCampaign: wrap(async (req, res) => sendData(res, await c.marketing.launchCampaign(org(req), req.params.campaignId, req.body, actor(req)), 202)),
       pauseCampaign: wrap(async (req, res) => sendData(res, await c.marketing.pauseCampaign(org(req), req.params.campaignId, actor(req)))),
       resumeCampaign: wrap(async (req, res) => sendData(res, await c.marketing.resumeCampaign(org(req), req.params.campaignId, actor(req))))
@@ -366,7 +402,7 @@ export function createControllers(container) {
       })
     },
     dashboard: {
-      summary: wrap(async (req, res) => sendData(res, await c.dashboard.summary(org(req)))),
+      summary: wrap(async (req, res) => sendData(res, await c.dashboard.summary(org(req), scopedOptions(req)))),
       pipeline: wrap(async (req, res) => sendData(res, await c.dashboard.pipeline(org(req)))),
       followUps: wrap(async (req, res) => sendList(res, await c.dashboard.followUps(org(req), req.auth.role === "SALES" ? req.auth.userId : req.query.assignedTo))),
       performance: wrap(async (req, res) => sendData(res, await c.dashboard.salesPerformance(org(req)))),
@@ -380,12 +416,16 @@ export function createControllers(container) {
     attachments: {
       get: wrap(async (req, res) => {
         const attachment = await c.media.get(org(req), req.params.attachmentId, { withSignedUrl: true });
-        checkAssigned(req, await c.contacts.get(org(req), attachment.contactId));
+        if (attachment.purpose !== "MARKETING_ASSET") {
+          await checkAssigned(req, await c.contacts.get(org(req), attachment.contactId));
+        }
         return sendData(res, attachment);
       }),
       content: wrap(async (req, res) => {
         const { attachment, buffer } = await c.media.getContent(org(req), req.params.attachmentId);
-        checkAssigned(req, await c.contacts.get(org(req), attachment.contactId));
+        if (attachment.purpose !== "MARKETING_ASSET") {
+          await checkAssigned(req, await c.contacts.get(org(req), attachment.contactId));
+        }
         const filename = safeDownloadName(attachment.originalFilename || attachment.attachmentId);
         const disposition = req.query.download === "true" ? "attachment" : "inline";
         res.set({
@@ -398,17 +438,23 @@ export function createControllers(container) {
         return res.send(buffer);
       }),
       upload: wrap(async (req, res) => {
-        const contact = await c.contacts.get(org(req), req.query.contactId);
-        checkAssigned(req, contact);
+        const marketingAsset = req.query.purpose === "MARKETING_ASSET";
+        const contactId = marketingAsset ? `MARKETING_${req.auth.userId}` : req.query.contactId;
+        if (!marketingAsset) {
+          const contact = await c.contacts.get(org(req), contactId);
+          await checkAssigned(req, contact);
+        }
         const attachment = await c.media.storeBuffer({
           orgId: org(req),
-          contactId: req.query.contactId,
+          contactId,
           conversationId: req.query.conversationId || null,
           messageId: null,
           buffer: req.body,
           mimeType: req.headers["content-type"],
           originalFilename: decodeUploadName(req.headers["x-filename"]),
-          normalizeForWhatsApp: true
+          normalizeForWhatsApp: true,
+          purpose: marketingAsset ? "MARKETING_ASSET" : "CHAT_ATTACHMENT",
+          createdBy: req.auth.userId
         });
         return sendData(res, attachment, 201);
       })
@@ -420,7 +466,7 @@ export function createControllers(container) {
     system: {
       info: wrap(async (req, res) => sendData(res, {
         service: "rx-communication-crm",
-        version: "2.5.4",
+        version: "2.7.0",
         orgId: org(req),
         features: {
           legacyDualWrite: c.env.ENABLE_LEGACY_DUAL_WRITE,
@@ -440,22 +486,22 @@ function resourceController(container, resource, scopedOptions, checkAssigned) {
     list: wrap(async (req, res) => sendList(res, await container.domain.list(resource, req.auth.orgId, scopedOptions(req)))),
     get: wrap(async (req, res) => {
       const value = await container.domain.get(resource, req.auth.orgId, req.params[singular]);
-      checkAssigned(req, value);
+      await checkAssigned(req, value);
       return sendData(res, value);
     }),
     update: wrap(async (req, res) => {
       const before = await container.domain.get(resource, req.auth.orgId, req.params[singular]);
-      checkAssigned(req, before);
+      await checkAssigned(req, before);
       return sendData(res, await container.domain.update(resource, req.auth.orgId, req.params[singular], req.body, req.auth));
     }),
     assign: wrap(async (req, res) => {
       const before = await container.domain.get(resource, req.auth.orgId, req.params[singular]);
-      checkAssigned(req, before);
+      await checkAssigned(req, before);
       return sendData(res, await container.domain.update(resource, req.auth.orgId, req.params[singular], { assignedTo: req.body.assignedTo }, req.auth, "ASSIGNED"));
     }),
     status: wrap(async (req, res) => {
       const before = await container.domain.get(resource, req.auth.orgId, req.params[singular]);
-      checkAssigned(req, before);
+      await checkAssigned(req, before);
       const field = resource === "leads" ? "leadStatus" : "status";
       return sendData(res, await container.domain.update(resource, req.auth.orgId, req.params[singular], { [field]: req.body.status }, req.auth, "STATUS_CHANGED"));
     }),

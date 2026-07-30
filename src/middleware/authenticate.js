@@ -1,5 +1,6 @@
 import { COLLECTIONS } from "../config/constants.js";
 import { AppError, ForbiddenError } from "../utils/errors.js";
+import { resolveClientScope } from "../utils/client-scope.js";
 
 export function createAuthenticate({ auth, store, otpAuth }) {
   return async function authenticate(req, _res, next) {
@@ -14,6 +15,8 @@ export function createAuthenticate({ auth, store, otpAuth }) {
           userId: user.userId || user.id,
           orgId: user.orgId,
           role: user.role,
+          email: user.email || "",
+          clientScope: resolveClientScope(user),
           permissions: user.permissions || []
         };
         req.user = user;
@@ -32,6 +35,8 @@ export function createAuthenticate({ auth, store, otpAuth }) {
         userId: user.userId || user.id,
         orgId: user.orgId,
         role: user.role,
+        email: user.email || decoded.email || "",
+        clientScope: resolveClientScope(user),
         permissions: user.permissions || []
       };
       req.user = user;

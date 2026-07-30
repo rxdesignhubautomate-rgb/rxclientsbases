@@ -61,6 +61,13 @@ export class FirestoreStore {
     };
   }
 
+  async count(collection, { filters = [] } = {}) {
+    let query = this.db.collection(collection);
+    for (const [field, operator, value] of filters) query = query.where(field, operator, value);
+    const snapshot = await query.count().get();
+    return Number(snapshot.data().count || 0);
+  }
+
   async runTransaction(callback) {
     return this.db.runTransaction(async (nativeTx) => {
       const tx = {

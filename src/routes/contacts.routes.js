@@ -7,6 +7,7 @@ export function contactsRoutes(controller) {
   const router = express.Router();
   router.post("/", authorizePermission("contacts.write"), validate(contactCreateSchema), controller.create);
   router.get("/", authorizePermission("contacts.read", "contacts.read_assigned"), controller.list);
+  router.get("/count", authorizePermission("contacts.read", "contacts.read_assigned"), controller.count);
   router.get("/:contactId", authorizePermission("contacts.read", "contacts.read_assigned"), controller.get);
   router.get("/:contactId/overview", authorizePermission("contacts.read", "contacts.read_assigned"), controller.overview);
   router.patch("/:contactId", authorizePermission("contacts.write"), validate(contactUpdateSchema), controller.update);

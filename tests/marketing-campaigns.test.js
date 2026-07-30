@@ -219,4 +219,122 @@ describe("WhatsApp marketing campaigns", () => {
     const started = await marketing.startCampaign("RXDH", campaign.campaignId, {}, { userId: "USR_ADMIN" });
     expect(started).toMatchObject({ status: "ACTIVE", lifecycleStatus: "RUNNING" });
   });
+
+  it("splits a scoped customer segment into deterministic batches of at most 500", async () => {
+    const core = makeCore();
+    const timestamp = new Date("2026-07-31T08:00:00.000Z");
+    await Promise.all(Array.from({ length: 1001 }, async (_, index) => {
+      const contactId = `CNT_PROSPECT_${String(index + 1).padStart(4, "0")}`;
+      await core.store.set("contacts", contactId, {
+        contactId,
+        orgId: "RXDH",
+        contactPerson: `Prospect ${index + 1}`,
+        relationshipType: "PROSPECT",
+        status: "ACTIVE",
+        marketingConsent: { status: "OPTED_IN" },
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+    }));
+    await core.store.set("contacts", "CNT_EXISTING", {
+      contactId: "CNT_EXISTING",
+      orgId: "RXDH",
+      contactPerson: "Existing client",
+      relationshipType: "EXISTING_CLIENT",
+      status: "ACTIVE",
+      marketingConsent: { status: "OPTED_IN" },
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+    const marketing = makeMarketing(core);
+    const result = await marketing.createSegmentBatches("RXDH", {
+      name: "Prospect rollout",
+      relationshipType: "PROSPECT",
+      batchSize: 500,
+      onlyOptedIn: true
+    }, {
+      userId: "USR_RESHU",
+      role: "SALES",
+      email: "reshu@rxdesignhub.com"
+    });
+
+    expect(result).toMatchObject({ relationshipType: "PROSPECT", totalContacts: 1001, batchCount: 3 });
+    expect(result.audiences.map((item) => item.contactCount)).toEqual([500, 500, 1]);
+    await expect(marketing.createSegmentBatches("RXDH", {
+      name: "Wrong segment",
+      relationshipType: "EXISTING_CLIENT",
+      batchSize: 500
+    }, {
+      userId: "USR_RESHU",
+      role: "SALES",
+      email: "reshu@rxdesignhub.com"
+    })).rejects.toThrow(/another team member/);
+  });
+
+  it("waits for a new customer reply before sending an open-window video drip", async () => {
+    const core = makeCore();
+    const seeded = await seedConversation(core);
+    await core.store.update("conversations", seeded.conversation.conversationId, {
+      lastInboundAt: new Date(Date.now() - 48 * 60 * 60 * 1000)
+    });
+    await core.store.set("attachments", "ATT_CAMPAIGN_VIDEO", {
+      attachmentId: "ATT_CAMPAIGN_VIDEO",
+      orgId: "RXDH",
+      purpose: "MARKETING_ASSET",
+      filename: "products.mp4",
+      mimeType: "video/mp4"
+    });
+    const marketing = makeMarketing(core);
+    await marketing.recordConsent("RXDH", seeded.contact.contactId, {
+      status: "OPTED_IN",
+      source: "WHATSAPP_REPLY",
+      note: "Asked to receive product updates"
+    });
+    const audience = await marketing.createAudience("RXDH", {
+      name: "Video prospects",
+      relationshipType: "PROSPECT",
+      contactIds: [seeded.contact.contactId]
+    });
+    const campaign = await marketing.createCampaign("RXDH", {
+      name: "Open-window video",
+      audienceId: audience.audienceId,
+      interestLabel: "new product range",
+      templateId: "interest_followup",
+      deliveryMode: "OPEN_WINDOW_ONLY",
+      trigger: "CUSTOMER_REPLY",
+      steps: [{
+        delayDays: 0,
+        delayMinutes: 0,
+        messageLine: "Here is the product video you requested.",
+        messageType: "VIDEO",
+        attachmentIds: ["ATT_CAMPAIGN_VIDEO"]
+      }]
+    });
+    const launched = await marketing.launchCampaign("RXDH", campaign.campaignId);
+    expect(launched.stats).toMatchObject({ active: 0, waiting: 1 });
+    expect(await marketing.processDue(10)).toHaveLength(0);
+
+    await core.store.update("conversations", seeded.conversation.conversationId, {
+      lastInboundAt: new Date()
+    });
+    await marketing.handleInbound({
+      orgId: "RXDH",
+      contactId: seeded.contact.contactId,
+      message: {
+        messageId: "MSG_WINDOW_OPEN",
+        conversationId: seeded.conversation.conversationId,
+        text: "Yes, please share the video"
+      }
+    });
+    await marketing.processDue(10);
+    const outbound = await core.store.find("messages", {
+      filters: [["direction", "==", "OUTBOUND"]],
+      limit: 10
+    });
+    expect(outbound.items).toHaveLength(1);
+    expect(outbound.items[0]).toMatchObject({
+      type: "VIDEO",
+      attachmentIds: ["ATT_CAMPAIGN_VIDEO"]
+    });
+  });
 });

@@ -91,9 +91,22 @@ Campaigns support internal submit/approve/schedule/start/pause/resume/cancel ope
 
 Use `POST /api/v1/whatsapp/templates/sync` after deployment. The complete environment list, architecture, routes, curl examples, worker modes, Firestore collections, Meta manual steps, and troubleshooting notes are in [WhatsApp smart messaging](docs/whatsapp-smart-messaging.md).
 
+## Segmented 500-contact campaigns and open-window media
+
+Backend v2.7.0 separates the sales workspace by customer relationship:
+
+- `ankit@rxdesignhub.com` can read and work with `EXISTING_CLIENT` records;
+- `reshu@rxdesignhub.com` can read and work with `PROSPECT` and `LEAD` records;
+- Owner, Admin, and Sales Manager roles can work with both segments;
+- creating an order moves a prospect into the existing-client segment and hands the relationship to Ankit.
+
+`POST /api/v1/marketing/audiences/batches` creates deterministic audience documents with at most 500 contacts each. The batch builder reads the selected segment once and writes each audience once, avoiding duplicate Firestore reads and writes at 10,000–20,000-contact scale.
+
+Campaigns can use `AUTO` delivery or `OPEN_WINDOW_ONLY`. AUTO sends free-form text inside the live customer-service window and falls back to an approved Meta Marketing template outside it. OPEN_WINDOW_ONLY supports text, image, video, audio, and document steps. When the 24-hour window is closed, enrollment waits without sending; the next inbound customer message reopens the window and resumes the drip. Media assets are stored in Firebase Storage with `purpose=MARKETING_ASSET`.
+
 ## Daily WhatsApp workspace
 
-Backend v2.5.4 and the matching frontend v1.5 add a cached, incremental shared inbox on top of the official Cloud API:
+Backend v2.7.0 and frontend v1.7 add segmented campaigns and open-window media drips on top of the cached, incremental shared inbox:
 
 - text, images, video, documents, audio/voice notes, locations, contact cards, interactive reply buttons, quoted replies, reactions, and clickable links;
 - delivery/read states, unread counters, incremental polling, desktop alerts, built-in/custom quick replies, and internal notes;

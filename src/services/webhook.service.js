@@ -118,6 +118,7 @@ export class WebhookService {
         leadId: lead.leadId,
         channel: "WHATSAPP",
         channelAccountId: account.channelAccountId || account.id,
+        contactRelationshipType: contact.relationshipType || "PROSPECT",
         assignedTo: lead.assignedTo
       });
       if (!lead.conversationId) {

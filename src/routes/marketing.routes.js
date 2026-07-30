@@ -3,6 +3,7 @@ import { authorizeRole } from "../middleware/authorize.js";
 import { validate } from "../middleware/validate.js";
 import {
   marketingAudienceSchema,
+  marketingBatchAudienceSchema,
   marketingCampaignSchema,
   marketingConsentSchema,
   marketingLaunchSchema,
@@ -11,13 +12,14 @@ import {
 
 export function marketingRoutes(controller) {
   const router = express.Router();
-  router.use(authorizeRole("OWNER", "ADMIN"));
+  router.use(authorizeRole("OWNER", "ADMIN", "SALES"));
   router.get("/templates", controller.templates);
   router.get("/replied", controller.listReplied);
   router.patch("/replied/:contactId", validate(marketingProspectUpdateSchema), controller.updateReplied);
   router.patch("/contacts/:contactId/consent", validate(marketingConsentSchema), controller.consent);
   router.get("/audiences", controller.listAudiences);
   router.post("/audiences", validate(marketingAudienceSchema), controller.createAudience);
+  router.post("/audiences/batches", validate(marketingBatchAudienceSchema), controller.createAudienceBatches);
   router.get("/audiences/:audienceId", controller.getAudience);
   router.patch("/audiences/:audienceId", validate(marketingAudienceSchema.partial()), controller.updateAudience);
   router.get("/campaigns", controller.listCampaigns);

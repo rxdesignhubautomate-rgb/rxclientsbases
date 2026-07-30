@@ -21,6 +21,7 @@ export function listQuery(query = {}) {
     search: String(query.search || "").trim().toLowerCase(),
     status: query.status ? String(query.status) : null,
     assignedTo: query.assignedTo ? String(query.assignedTo) : null,
+    relationshipType: query.relationshipType ? String(query.relationshipType).toUpperCase() : null,
     from: query.from ? new Date(String(query.from)) : null,
     to: query.to ? new Date(String(query.to)) : null
   };

@@ -1,4 +1,5 @@
 import { ForbiddenError } from "../utils/errors.js";
+import { canAccessRelationship, CLIENT_SCOPES } from "../utils/client-scope.js";
 
 const elevated = new Set(["OWNER", "ADMIN"]);
 
@@ -21,6 +22,12 @@ export function authorizePermission(...permissions) {
 export function enforceAssignment(entity) {
   return (req) => {
     if (elevated.has(req.auth.role) || req.auth.role === "SALES_MANAGER") return;
-    if (req.auth.role === "SALES" && entity.assignedTo !== req.auth.userId) throw new ForbiddenError();
+    if (req.auth.role !== "SALES") return;
+    if (req.auth.clientScope && req.auth.clientScope !== CLIENT_SCOPES.ASSIGNED) {
+      const relationshipType = entity.relationshipType || entity.contactRelationshipType;
+      if (!canAccessRelationship(req.auth.clientScope, relationshipType)) throw new ForbiddenError();
+      return;
+    }
+    if (entity.assignedTo !== req.auth.userId) throw new ForbiddenError();
   };
 }

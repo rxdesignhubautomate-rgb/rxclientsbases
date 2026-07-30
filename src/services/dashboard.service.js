@@ -6,22 +6,57 @@ export class DashboardService {
     this.store = store;
   }
 
-  async summary(orgId) {
-    const [contacts, openConversations, leads, dueFollowUps, activeOrders] = await Promise.all([
-      this._items(COLLECTIONS.contacts, orgId, [], 1000),
+  async summary(orgId, options = {}) {
+    const contactFilters = [["orgId", "==", orgId]];
+    if (options.assignedTo) contactFilters.push(["assignedTo", "==", options.assignedTo]);
+    if (options.relationshipTypes?.length === 1) contactFilters.push(["relationshipType", "==", options.relationshipTypes[0]]);
+    if (options.relationshipTypes?.length > 1) contactFilters.push(["relationshipType", "in", options.relationshipTypes]);
+    const [contactCount, existingClientCount, openConversations, leads, dueFollowUps, activeOrders] = await Promise.all([
+      this.store.count(COLLECTIONS.contacts, { filters: contactFilters }),
+      options.relationshipTypes?.length
+        ? (options.relationshipTypes.includes("EXISTING_CLIENT")
+          ? this.store.count(COLLECTIONS.contacts, { filters: contactFilters })
+          : 0)
+        : this.store.count(COLLECTIONS.contacts, {
+          filters: [["orgId", "==", orgId], ["relationshipType", "==", "EXISTING_CLIENT"]]
+        }),
       this._items(COLLECTIONS.conversations, orgId, [["status", "==", "OPEN"]], 1000),
       this._items(COLLECTIONS.leads, orgId, [], 1000),
       this._items(COLLECTIONS.followUps, orgId, [["status", "==", "SCHEDULED"], ["dueAt", "<=", now()]], 500),
       this._items(COLLECTIONS.orders, orgId, [["status", "not-in", ["CANCELLED", "COMPLETED", "DISPATCHED"]]], 500)
     ]);
+    const scoped = await this._scopeRelatedItems(
+      options,
+      { openConversations, leads, dueFollowUps, activeOrders }
+    );
     return {
-      contacts: contacts.length,
-      openConversations: openConversations.length,
-      unreadMessages: openConversations.reduce((sum, item) => sum + Number(item.unreadCount || 0), 0),
-      activeLeads: leads.filter((lead) => !["CLOSED_WON", "CLOSED_LOST"].includes(lead.leadStatus)).length,
-      dueFollowUps: dueFollowUps.length,
-      activeOrders: activeOrders.length
+      contacts: contactCount,
+      existingClients: existingClientCount,
+      openConversations: scoped.openConversations.length,
+      unreadMessages: scoped.openConversations.reduce((sum, item) => sum + Number(item.unreadCount || 0), 0),
+      activeLeads: scoped.leads.filter((lead) => !["CLOSED_WON", "CLOSED_LOST"].includes(lead.leadStatus)).length,
+      dueFollowUps: scoped.dueFollowUps.length,
+      activeOrders: scoped.activeOrders.length
     };
+  }
+
+  async _scopeRelatedItems(options, groups) {
+    if (!options.relationshipTypes?.length && !options.assignedTo) return groups;
+    const allItems = Object.values(groups).flat();
+    const contacts = await this.store.getMany(
+      COLLECTIONS.contacts,
+      [...new Set(allItems.map((item) => item.contactId).filter(Boolean))]
+    );
+    const allowed = new Set(contacts
+      .filter((contact) => {
+        if (options.assignedTo && contact.assignedTo !== options.assignedTo) return false;
+        return !options.relationshipTypes?.length || options.relationshipTypes.includes(contact.relationshipType || "PROSPECT");
+      })
+      .map((contact) => contact.contactId || contact.id));
+    return Object.fromEntries(Object.entries(groups).map(([key, items]) => [
+      key,
+      items.filter((item) => allowed.has(item.contactId))
+    ]));
   }
 
   async pipeline(orgId) {

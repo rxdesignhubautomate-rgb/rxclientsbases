@@ -60,6 +60,12 @@ export class MemoryStore {
     return { items, pagination: { hasMore, nextCursor: hasMore ? encodeCursor(items.at(-1)?.id) : null } };
   }
 
+  async count(collection, { filters = [] } = {}) {
+    return [...this.bucket(collection).values()]
+      .filter((item) => filters.every(([field, op, expected]) => compare(item[field], op, expected)))
+      .length;
+  }
+
   async runTransaction(callback) {
     const snapshot = new Map([...this.collections].map(([name, bucket]) => [name, new Map([...bucket].map(([id, value]) => [id, clone(value)]))]));
     const txStore = new MemoryStore();

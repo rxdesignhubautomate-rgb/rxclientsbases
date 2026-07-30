@@ -78,6 +78,8 @@ export class MediaService {
       sha256: actualHash,
       providerMediaId: input.providerMediaId || null,
       providerHashMatched: input.expectedSha256 ? input.expectedSha256 === actualHash : null,
+      purpose: input.purpose || "CHAT_ATTACHMENT",
+      createdBy: input.createdBy || null,
       whatsappMedia: prepared.normalized
         ? {
             normalized: true,

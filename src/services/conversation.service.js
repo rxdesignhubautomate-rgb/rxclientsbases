@@ -11,12 +11,21 @@ export class ConversationService {
     this.defaultAiMode = defaultAiMode;
   }
 
-  async findOrCreate({ orgId, contactId, leadId = null, channel, channelAccountId, assignedTo = null }) {
+  async findOrCreate({ orgId, contactId, leadId = null, channel, channelAccountId, assignedTo = null, contactRelationshipType = "PROSPECT" }) {
     const keyId = sha256(`${orgId}:${contactId}:${channel}:OPEN`);
     const key = await this.store.get(COLLECTIONS.openConversationKeys, keyId);
     if (key) {
       const existing = await this.store.get(COLLECTIONS.conversations, key.conversationId);
-      if (existing?.orgId === orgId && existing.status !== "CLOSED") return existing;
+      if (existing?.orgId === orgId && existing.status !== "CLOSED") {
+        if (!existing.contactRelationshipType && contactRelationshipType) {
+          await this.store.update(COLLECTIONS.conversations, existing.conversationId || existing.id, {
+            contactRelationshipType,
+            updatedAt: now()
+          });
+          existing.contactRelationshipType = contactRelationshipType;
+        }
+        return existing;
+      }
     }
     const conversationId = createId("conversation");
     const timestamp = now();
@@ -27,6 +36,7 @@ export class ConversationService {
       leadId,
       status: "OPEN",
       assignedTo,
+      contactRelationshipType,
       currentChannel: channel,
       currentChannelAccountId: channelAccountId,
       aiMode: this.defaultAiMode,
@@ -70,10 +80,13 @@ export class ConversationService {
     if (options.assignedTo) filters.push(["assignedTo", "==", options.assignedTo]);
     if (options.contactId) filters.push(["contactId", "==", options.contactId]);
     if (options.from) filters.push(["updatedAt", ">=", options.from]);
+    const fetchLimit = options.relationshipTypes?.length
+      ? Math.min(Math.max(Number(options.limit || 100) * 10, 500), 5000)
+      : options.limit;
     const result = await this.store.find(COLLECTIONS.conversations, {
       filters,
       orderBy: [safeSort(options.sortBy), options.sortOrder || "desc"],
-      limit: options.limit,
+      limit: fetchLimit,
       cursor: options.cursor,
       search: options.search,
       searchFields: ["lastMessagePreview", "summary"]
@@ -82,10 +95,17 @@ export class ConversationService {
       ? await this.store.getMany(COLLECTIONS.contacts, result.items.map((item) => item.contactId))
       : await Promise.all(result.items.map((item) => this.store.get(COLLECTIONS.contacts, item.contactId)));
     const contactById = new Map(contacts.filter(Boolean).map((item) => [item.contactId || item.id, item]));
+    const scopedItems = options.relationshipTypes?.length
+      ? result.items.filter((item) => {
+        const contact = contactById.get(item.contactId);
+        return options.relationshipTypes.includes(contact?.relationshipType || item.contactRelationshipType || "PROSPECT");
+      }).slice(0, options.limit || 100)
+      : result.items;
     return {
       ...result,
-      items: result.items.map((item) => ({
+      items: scopedItems.map((item) => ({
         ...item,
+        contactRelationshipType: contactById.get(item.contactId)?.relationshipType || item.contactRelationshipType || "PROSPECT",
         contact: contactSummary(contactById.get(item.contactId)),
         customerServiceWindow: customerServiceWindow(item.lastInboundAt)
       }))
@@ -174,6 +194,7 @@ function contactSummary(contact) {
     city: contact.city || "",
     salesPersonName: contact.salesPersonName || "",
     assignedTo: contact.assignedTo || null,
+    relationshipType: contact.relationshipType || "PROSPECT",
     tags: contact.tags || [],
     status: contact.status || "ACTIVE"
   };

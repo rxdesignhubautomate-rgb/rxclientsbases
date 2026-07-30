@@ -77,7 +77,16 @@ export const marketingConsentSchema = z.object({
 export const marketingAudienceSchema = z.object({
   name: z.string().trim().min(2).max(120),
   description: z.string().trim().max(1000).optional().default(""),
-  contactIds: z.array(id).min(1).max(10000)
+  relationshipType: z.enum(["EXISTING_CLIENT", "PROSPECT"]).optional(),
+  contactIds: z.array(id).min(1).max(500)
+});
+
+export const marketingBatchAudienceSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  description: z.string().trim().max(1000).optional().default(""),
+  relationshipType: z.enum(["EXISTING_CLIENT", "PROSPECT"]),
+  batchSize: z.number().int().min(1).max(500).optional().default(500),
+  onlyOptedIn: z.boolean().optional().default(false)
 });
 
 export const marketingCampaignSchema = z.object({
@@ -85,10 +94,32 @@ export const marketingCampaignSchema = z.object({
   audienceId: id,
   interestLabel: z.string().trim().min(2).max(160),
   templateId: z.string().trim().min(2).max(80).default("interest_followup"),
+  deliveryMode: z.enum(["AUTO", "OPEN_WINDOW_ONLY"]).optional().default("AUTO"),
+  trigger: z.enum(["MANUAL", "CUSTOMER_REPLY"]).optional().default("MANUAL"),
   steps: z.array(z.object({
     delayDays: z.number().int().min(0).max(90),
-    messageLine: z.string().trim().min(2).max(500)
+    delayMinutes: z.number().int().min(0).max(43200).optional(),
+    messageLine: z.string().trim().min(2).max(1024),
+    messageType: z.enum(["TEXT", "IMAGE", "VIDEO", "DOCUMENT", "AUDIO"]).optional().default("TEXT"),
+    attachmentIds: z.array(id).max(1).optional().default([])
   })).min(1).max(5)
+}).superRefine((value, context) => {
+  value.steps.forEach((step, index) => {
+    if (step.messageType !== "TEXT" && step.attachmentIds.length !== 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["steps", index, "attachmentIds"],
+        message: "A media drip step needs exactly one uploaded file"
+      });
+    }
+    if (step.messageType !== "TEXT" && value.deliveryMode !== "OPEN_WINDOW_ONLY") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["deliveryMode"],
+        message: "Media drip campaigns must use the 24-hour open-window mode"
+      });
+    }
+  });
 });
 
 export const marketingLaunchSchema = z.object({

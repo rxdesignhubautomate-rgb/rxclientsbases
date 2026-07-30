@@ -30,6 +30,30 @@ describe("contact service", () => {
     expect(resolved.identity.contactId).toBe(contact.contactId);
   });
 
+  it("counts every contact and existing clients without loading the directory", async () => {
+    const core = makeCore();
+    await core.contacts.create("RXDH", {
+      companyName: "Existing Client",
+      primaryPhone: "9876543210",
+      relationshipType: "EXISTING_CLIENT"
+    });
+    await core.contacts.create("RXDH", {
+      companyName: "Prospect",
+      primaryPhone: "9123456789",
+      relationshipType: "PROSPECT"
+    });
+    await core.contacts.create("OTHER", {
+      companyName: "Other Organization",
+      primaryPhone: "9988776655",
+      relationshipType: "EXISTING_CLIENT"
+    });
+
+    await expect(core.contacts.count("RXDH")).resolves.toEqual({
+      totalContacts: 2,
+      existingClients: 1
+    });
+  });
+
   it("merges contacts without losing linked messages", async () => {
     const core = makeCore();
     const primary = await core.contacts.create("RXDH", { primaryPhone: "9876543210" });

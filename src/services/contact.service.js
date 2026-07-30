@@ -67,6 +67,9 @@ export class ContactService {
     const filters = [["orgId", "==", orgId]];
     if (options.status) filters.push(["status", "==", options.status]);
     if (options.assignedTo) filters.push(["assignedTo", "==", options.assignedTo]);
+    if (options.relationshipTypes?.length === 1) filters.push(["relationshipType", "==", options.relationshipTypes[0]]);
+    if (options.relationshipTypes?.length > 1) filters.push(["relationshipType", "in", options.relationshipTypes]);
+    if (options.relationshipType) filters.push(["relationshipType", "==", options.relationshipType]);
     return this.store.find(COLLECTIONS.contacts, {
       filters,
       orderBy: [safeContactSort(options.sortBy), options.sortOrder || "desc"],
@@ -75,6 +78,24 @@ export class ContactService {
       search: options.search,
       searchFields: ["companyName", "contactPerson", "primaryPhone", "city"]
     });
+  }
+
+  async count(orgId, options = {}) {
+    const baseFilters = [["orgId", "==", orgId]];
+    if (options.assignedTo) baseFilters.push(["assignedTo", "==", options.assignedTo]);
+    if (options.relationshipTypes?.length === 1) baseFilters.push(["relationshipType", "==", options.relationshipTypes[0]]);
+    if (options.relationshipTypes?.length > 1) baseFilters.push(["relationshipType", "in", options.relationshipTypes]);
+    if (options.relationshipType) baseFilters.push(["relationshipType", "==", options.relationshipType]);
+    const scopedTypes = options.relationshipTypes?.length
+      ? options.relationshipTypes
+      : options.relationshipType ? [options.relationshipType] : null;
+    const totalContacts = await this.store.count(COLLECTIONS.contacts, { filters: baseFilters });
+    const existingClients = scopedTypes
+      ? (scopedTypes.includes("EXISTING_CLIENT") ? totalContacts : 0)
+      : await this.store.count(COLLECTIONS.contacts, {
+        filters: [...baseFilters, ["relationshipType", "==", "EXISTING_CLIENT"]]
+      });
+    return { totalContacts, existingClients };
   }
 
   async overview(orgId, contactId) {
@@ -131,6 +152,27 @@ export class ContactService {
       });
     } else {
       await this.store.update(COLLECTIONS.contacts, contactId, patch);
+    }
+    if (input.relationshipType && input.relationshipType !== before.relationshipType) {
+      const conversations = await this.store.find(COLLECTIONS.conversations, {
+        filters: [["contactId", "==", contactId]],
+        limit: 10000
+      });
+      if (conversations.items.length) {
+        await this.store.batchUpdate(COLLECTIONS.conversations, conversations.items
+          .filter((item) => item.orgId === orgId)
+          .map((item) => ({
+            id: item.conversationId || item.id,
+            data: { contactRelationshipType: input.relationshipType, updatedAt: now() }
+          })));
+      }
+      const prospect = await this.store.get(COLLECTIONS.marketingProspects, contactId);
+      if (prospect?.orgId === orgId) {
+        await this.store.update(COLLECTIONS.marketingProspects, contactId, {
+          relationshipType: input.relationshipType,
+          updatedAt: now()
+        });
+      }
     }
     await this.audit.write(actorAudit(actor, orgId, "CONTACT_UPDATED", "CONTACT", contactId, before, patch));
     return this.get(orgId, contactId);

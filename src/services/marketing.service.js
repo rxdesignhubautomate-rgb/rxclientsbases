@@ -3,12 +3,22 @@ import { createId } from "../utils/ids.js";
 import { now, toDate } from "../utils/dates.js";
 import { normalizePhone } from "../utils/phone.js";
 import { ConflictError, NotFoundError } from "../utils/errors.js";
+import { customerServiceWindow } from "./conversation.service.js";
+import {
+  canAccessRelationship,
+  CLIENT_SCOPES,
+  normalizeSegment,
+  relationshipTypesForScope,
+  resolveClientScope
+} from "../utils/client-scope.js";
 
-const ACTIVE_ENROLLMENT_STATUSES = new Set(["ACTIVE", "PROCESSING", "PAUSED", "PAUSED_REPLIED", "COMPLETED"]);
+const ACTIVE_ENROLLMENT_STATUSES = new Set(["ACTIVE", "PROCESSING", "WAITING_FOR_WINDOW", "PAUSED", "PAUSED_REPLIED", "COMPLETED"]);
 const RUNNING_CAMPAIGN_STATUSES = new Set(["ACTIVE", "RUNNING"]);
 const OPT_OUT_PHRASES = Object.freeze(["STOP", "UNSUBSCRIBE", "CANCEL", "END", "QUIT", "NOT INTERESTED", "NO MORE MESSAGES", "BAND KARO", "MESSAGE MAT KARO"]);
 const OPT_IN_PHRASES = new Set(["START", "YES", "INTERESTED", "SEND DETAILS", "SEND SAMPLE", "PRICE BHEJO"]);
 const MAX_AUDIENCE_SIZE = 10000;
+const MAX_RECIPIENTS_PER_BATCH = 500;
+const MAX_SEGMENT_CONTACTS = 50000;
 const TEMPERATURE_RANK = Object.freeze({ HOT: 3, WARM: 2, COLD: 1 });
 
 export class MarketingService {
@@ -39,6 +49,14 @@ export class MarketingService {
       cursor: options.cursor
     });
     let items = result.items;
+    if (options.relationshipTypes?.length) {
+      const missingType = items.filter((item) => !item.relationshipType);
+      const contacts = missingType.length
+        ? await this.store.getMany(COLLECTIONS.contacts, missingType.map((item) => item.contactId))
+        : [];
+      const typeByContact = new Map(contacts.map((contact) => [contact.contactId || contact.id, contact.relationshipType || "PROSPECT"]));
+      items = items.filter((item) => options.relationshipTypes.includes(item.relationshipType || typeByContact.get(item.contactId) || "PROSPECT"));
+    }
     if (options.temperature) items = items.filter((item) => item.aiTemperature === options.temperature);
     if (options.important !== undefined) items = items.filter((item) => Boolean(item.important) === options.important);
     if (options.repeatMarketing !== undefined) items = items.filter((item) => Boolean(item.repeatMarketing) === options.repeatMarketing);
@@ -60,6 +78,7 @@ export class MarketingService {
         contactPerson: contact.contactPerson || "",
         primaryPhone: contact.primaryPhone || "",
         city: contact.city || "",
+        relationshipType: contact.relationshipType || "PROSPECT",
         status: "REPLIED",
         aiTemperature: classification.temperature,
         aiConfidence: classification.confidence,
@@ -89,6 +108,8 @@ export class MarketingService {
   async updateRepliedProspect(orgId, contactId, input, actor = {}) {
     const before = await this.store.get(COLLECTIONS.marketingProspects, contactId);
     if (!before || before.orgId !== orgId) throw new NotFoundError("Replied marketing customer");
+    const contact = await this.contacts.get(orgId, contactId);
+    this.assertActorRelationship(actor, contact.relationshipType);
     if (input.assignedTo) {
       const user = await this.store.get(COLLECTIONS.users, input.assignedTo);
       if (!user || user.orgId !== orgId || !user.active || !["OWNER", "ADMIN", "SALES_MANAGER", "SALES"].includes(user.role)) {
@@ -96,7 +117,6 @@ export class MarketingService {
       }
     }
     if (input.repeatMarketing === true) {
-      const contact = await this.contacts.get(orgId, contactId);
       if (contact.marketingConsent?.status !== "OPTED_IN") {
         throw new ConflictError("Record WhatsApp marketing opt-in before adding this customer to repeat marketing");
       }
@@ -202,8 +222,15 @@ export class MarketingService {
   async createAudience(orgId, input, actor = {}) {
     const contactIds = unique(input.contactIds);
     if (!contactIds.length) throw new ConflictError("Select at least one interested customer");
-    if (contactIds.length > MAX_AUDIENCE_SIZE) throw new ConflictError(`An audience can contain up to ${MAX_AUDIENCE_SIZE} customers`);
-    await this.assertContacts(orgId, contactIds);
+    if (contactIds.length > MAX_RECIPIENTS_PER_BATCH) throw new ConflictError(`Create separate batches of up to ${MAX_RECIPIENTS_PER_BATCH} customers`);
+    const contacts = await this.assertContacts(orgId, contactIds);
+    const relationshipType = normalizeSegment(input.relationshipType)
+      || singleSegment(contacts)
+      || "MIXED";
+    this.assertActorRelationship(actor, relationshipType);
+    if (actor.role === "SALES" && relationshipType === "MIXED") {
+      throw new ConflictError("A sales user cannot create a mixed client/prospect audience");
+    }
     const audienceId = createId("marketingAudience");
     const timestamp = now();
     const audience = {
@@ -211,6 +238,8 @@ export class MarketingService {
       orgId,
       name: input.name,
       description: input.description || "",
+      relationshipType,
+      ownerScope: resolveClientScope(actor),
       contactIds,
       contactCount: contactIds.length,
       createdBy: actor.userId || "SYSTEM",
@@ -222,15 +251,82 @@ export class MarketingService {
     return audience;
   }
 
+  async createSegmentBatches(orgId, input, actor = {}) {
+    const relationshipType = normalizeSegment(input.relationshipType);
+    if (!relationshipType) throw new ConflictError("Select Existing Client or Prospect");
+    this.assertActorRelationship(actor, relationshipType);
+    const relationshipTypes = relationshipType === "PROSPECT" ? ["PROSPECT", "LEAD"] : ["EXISTING_CLIENT"];
+    const result = await this.store.find(COLLECTIONS.contacts, {
+      filters: [
+        ["orgId", "==", orgId],
+        ["relationshipType", relationshipTypes.length === 1 ? "==" : "in", relationshipTypes.length === 1 ? relationshipTypes[0] : relationshipTypes]
+      ],
+      orderBy: ["createdAt", "asc"],
+      limit: MAX_SEGMENT_CONTACTS
+    });
+    const contacts = result.items
+      .filter((contact) => contact.status === "ACTIVE")
+      .filter((contact) => !input.onlyOptedIn || contact.marketingConsent?.status === "OPTED_IN" || contact.marketingOptIn === true)
+      .sort((left, right) => String(left.contactId || left.id).localeCompare(String(right.contactId || right.id)));
+    if (!contacts.length) throw new ConflictError(`No active ${relationshipType === "EXISTING_CLIENT" ? "existing clients" : "prospects"} were found`);
+    const batchSize = Math.min(Number(input.batchSize) || MAX_RECIPIENTS_PER_BATCH, MAX_RECIPIENTS_PER_BATCH);
+    const chunks = chunk(contacts, batchSize);
+    const batchGroupId = createId("marketingAudience");
+    const created = [];
+    for (let index = 0; index < chunks.length; index += 1) {
+      const audienceId = createId("marketingAudience");
+      const contactIds = chunks[index].map((contact) => contact.contactId || contact.id);
+      const timestamp = now();
+      const batch = {
+        audienceId,
+        orgId,
+        name: `${input.name} - Batch ${index + 1} of ${chunks.length}`,
+        description: input.description || `${relationshipType === "EXISTING_CLIENT" ? "Existing clients" : "Prospects"} batch`,
+        relationshipType,
+        ownerScope: resolveClientScope(actor),
+        contactIds,
+        contactCount: contactIds.length,
+        batchGroupId,
+        batchNumber: index + 1,
+        batchCount: chunks.length,
+        batchSize: contactIds.length,
+        createdBy: actor.userId || "SYSTEM",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+      await this.store.create(COLLECTIONS.marketingAudiences, audienceId, batch);
+      created.push(batch);
+    }
+    await this.audit.write({
+      orgId,
+      actorId: actor.userId || "SYSTEM",
+      action: "MARKETING_AUDIENCE_BATCHES_CREATED",
+      entityType: "MARKETING_AUDIENCE_GROUP",
+      entityId: batchGroupId,
+      after: { relationshipType, totalContacts: contacts.length, batchCount: created.length, batchSize }
+    });
+    return {
+      batchGroupId,
+      relationshipType,
+      totalContacts: contacts.length,
+      batchSize,
+      batchCount: created.length,
+      audiences: created
+    };
+  }
+
   async updateAudience(orgId, audienceId, input, actor = {}) {
-    const before = await this.getAudience(orgId, audienceId, { includeContacts: false });
+    const before = await this.getAudience(orgId, audienceId, { includeContacts: false, actor });
     const contactIds = input.contactIds ? unique(input.contactIds) : before.contactIds;
     if (!contactIds.length) throw new ConflictError("Select at least one interested customer");
-    if (contactIds.length > MAX_AUDIENCE_SIZE) throw new ConflictError(`An audience can contain up to ${MAX_AUDIENCE_SIZE} customers`);
-    await this.assertContacts(orgId, contactIds);
+    if (contactIds.length > MAX_RECIPIENTS_PER_BATCH) throw new ConflictError(`An audience can contain up to ${MAX_RECIPIENTS_PER_BATCH} customers`);
+    const contacts = await this.assertContacts(orgId, contactIds);
+    const relationshipType = normalizeSegment(input.relationshipType) || singleSegment(contacts) || before.relationshipType || "MIXED";
+    this.assertActorRelationship(actor, relationshipType);
     const patch = {
       name: input.name ?? before.name,
       description: input.description ?? before.description,
+      relationshipType,
       contactIds,
       contactCount: contactIds.length,
       updatedAt: now()
@@ -246,12 +342,14 @@ export class MarketingService {
       limit: options.limit || 100,
       cursor: options.cursor
     });
-    return { ...result, items: sortRecent(result.items) };
+    const items = this.filterForActor(result.items, options.actor);
+    return { ...result, items: sortRecent(items) };
   }
 
-  async getAudience(orgId, audienceId, { includeContacts = true } = {}) {
+  async getAudience(orgId, audienceId, { includeContacts = true, actor = {} } = {}) {
     const audience = await this.store.get(COLLECTIONS.marketingAudiences, audienceId);
     if (!audience || audience.orgId !== orgId) throw new NotFoundError("Marketing audience");
+    this.assertActorRelationship(actor, audience.relationshipType || "MIXED");
     if (!includeContacts) return audience;
     const contacts = await this.store.getMany(COLLECTIONS.contacts, audience.contactIds || []);
     const items = contacts.filter((contact) => contact.orgId === orgId).map(contactSummary);
@@ -263,7 +361,8 @@ export class MarketingService {
   }
 
   async createCampaign(orgId, input, actor = {}) {
-    const audience = await this.getAudience(orgId, input.audienceId, { includeContacts: false });
+    const audience = await this.getAudience(orgId, input.audienceId, { includeContacts: false, actor });
+    await this.assertCampaignAttachments(orgId, input.steps);
     const campaignId = createId("marketingCampaign");
     const timestamp = now();
     const campaign = {
@@ -274,11 +373,18 @@ export class MarketingService {
       name: input.name,
       interestLabel: input.interestLabel,
       templateId: input.templateId,
+      relationshipType: audience.relationshipType || "MIXED",
+      ownerScope: resolveClientScope(actor),
+      deliveryMode: input.deliveryMode || "AUTO",
+      trigger: input.trigger || "MANUAL",
       steps: input.steps.map((step, index) => ({
         stepId: `STEP_${index + 1}`,
         position: index + 1,
         delayDays: step.delayDays,
-        messageLine: step.messageLine
+        delayMinutes: step.delayMinutes ?? Number(step.delayDays || 0) * 24 * 60,
+        messageLine: step.messageLine,
+        messageType: step.messageType || "TEXT",
+        attachmentIds: step.attachmentIds || []
       })),
       templateCategory: "MARKETING",
       status: "DRAFT",
@@ -303,13 +409,15 @@ export class MarketingService {
       limit: options.limit || 100,
       cursor: options.cursor
     });
-    const items = options.status ? result.items.filter((item) => item.status === options.status) : result.items;
+    let items = this.filterForActor(result.items, options.actor);
+    if (options.status) items = items.filter((item) => item.status === options.status);
     return { ...result, items: sortRecent(items) };
   }
 
-  async getCampaign(orgId, campaignId, { includeEnrollments = false } = {}) {
+  async getCampaign(orgId, campaignId, { includeEnrollments = false, actor = {} } = {}) {
     const campaign = await this.store.get(COLLECTIONS.marketingCampaigns, campaignId);
     if (!campaign || campaign.orgId !== orgId) throw new NotFoundError("Marketing campaign");
+    this.assertActorRelationship(actor, campaign.relationshipType || "MIXED");
     if (!includeEnrollments) return campaign;
     const enrollments = await this.store.find(COLLECTIONS.campaignEnrollments, {
       filters: [["campaignId", "==", campaignId]],
@@ -319,7 +427,7 @@ export class MarketingService {
   }
 
   async submitCampaign(orgId, campaignId, actor = {}) {
-    const campaign = await this.getCampaign(orgId, campaignId);
+    const campaign = await this.getCampaign(orgId, campaignId, { actor });
     if (campaign.status !== "DRAFT") throw new ConflictError("Only a draft campaign can be submitted");
     await this.store.update(COLLECTIONS.marketingCampaigns, campaignId, {
       status: "PENDING_APPROVAL",
@@ -333,7 +441,7 @@ export class MarketingService {
   }
 
   async approveCampaign(orgId, campaignId, actor = {}) {
-    const campaign = await this.getCampaign(orgId, campaignId);
+    const campaign = await this.getCampaign(orgId, campaignId, { actor });
     if (campaign.status !== "PENDING_APPROVAL") throw new ConflictError("Only a submitted campaign can be approved");
     await this.store.update(COLLECTIONS.marketingCampaigns, campaignId, {
       status: "APPROVED",
@@ -347,7 +455,7 @@ export class MarketingService {
   }
 
   async scheduleCampaign(orgId, campaignId, startAt, actor = {}) {
-    const campaign = await this.getCampaign(orgId, campaignId);
+    const campaign = await this.getCampaign(orgId, campaignId, { actor });
     if (campaign.status !== "APPROVED") throw new ConflictError("Only an approved campaign can be scheduled");
     const scheduledAt = toDate(startAt);
     if (!scheduledAt || scheduledAt.getTime() <= Date.now()) throw new ConflictError("Schedule time must be in the future");
@@ -368,8 +476,9 @@ export class MarketingService {
   }
 
   async launchCampaign(orgId, campaignId, input = {}, actor = {}) {
-    let campaign = await this.getCampaign(orgId, campaignId);
+    let campaign = await this.getCampaign(orgId, campaignId, { actor });
     if (campaign.status === "DRAFT" && input.requireApproval !== true) {
+      if (actor.role === "SALES") throw new ConflictError("Submit this campaign for admin approval before starting it");
       await this.store.update(COLLECTIONS.marketingCampaigns, campaignId, {
         status: "APPROVED",
         lifecycleStatus: "APPROVED",
@@ -378,11 +487,13 @@ export class MarketingService {
         approvalMode: "LEGACY_ADMIN_LAUNCH",
         updatedAt: now()
       });
-      campaign = await this.getCampaign(orgId, campaignId);
+      campaign = await this.getCampaign(orgId, campaignId, { actor });
     }
     if (!["APPROVED", "SCHEDULED"].includes(campaign.status)) throw new ConflictError("Campaign must be internally approved before it can start");
-    if (this.templateRegistry) await this.templateRegistry.assertApproved(orgId, campaign.templateId);
-    const audience = await this.getAudience(orgId, campaign.audienceId);
+    if (this.templateRegistry && campaign.deliveryMode !== "OPEN_WINDOW_ONLY") {
+      await this.templateRegistry.assertApproved(orgId, campaign.templateId);
+    }
+    const audience = await this.getAudience(orgId, campaign.audienceId, { actor });
     const requestedStartAt = toDate(input.startAt) || now();
     if (campaign.status !== "SCHEDULED" && requestedStartAt.getTime() < Date.now() - 60_000) {
       throw new ConflictError("Campaign start time cannot be in the past");
@@ -391,6 +502,7 @@ export class MarketingService {
     const firstStep = campaign.steps[0];
     const enrollmentItems = [];
     let eligible = 0;
+    let waiting = 0;
     let suppressed = 0;
     for (const contact of audience.contacts) {
       const frequency = this.smartMessages?.marketingFrequency(contact, campaign.templateId, startAt);
@@ -398,10 +510,15 @@ export class MarketingService {
         || (frequency?.limitReached ? "FREQUENCY_LIMIT" : null)
         || (frequency?.cooldownActive ? "COOLDOWN_ACTIVE" : null);
       const isEligible = !reason;
+      const openWindow = serviceWindowForContact(contact, startAt).open;
+      const waitsForReply = isEligible
+        && campaign.deliveryMode === "OPEN_WINDOW_ONLY"
+        && (!openWindow || campaign.trigger === "CUSTOMER_REPLY");
       const enrollmentId = createId("campaignEnrollment");
-      const status = isEligible ? "ACTIVE" : "SUPPRESSED";
+      const status = !isEligible ? "SUPPRESSED" : waitsForReply ? "WAITING_FOR_WINDOW" : "ACTIVE";
       if (isEligible) eligible += 1;
-      else suppressed += 1;
+      if (waitsForReply) waiting += 1;
+      if (!isEligible) suppressed += 1;
       enrollmentItems.push({
         id: enrollmentId,
         data: {
@@ -413,8 +530,9 @@ export class MarketingService {
           conversationId: null,
           status,
           suppressionReason: isEligible ? null : reason,
+          waitingReason: waitsForReply ? (campaign.trigger === "CUSTOMER_REPLY" ? "WAITING_FOR_CUSTOMER_REPLY" : "SERVICE_WINDOW_CLOSED") : null,
           currentStepIndex: 0,
-          nextRunAt: isEligible ? addDays(startAt, firstStep.delayDays) : null,
+          nextRunAt: status === "ACTIVE" ? addStepDelay(startAt, firstStep) : null,
           sentCount: 0,
           lastMessageId: null,
           replyMessageId: null,
@@ -426,14 +544,22 @@ export class MarketingService {
     }
     if (!eligible) throw new ConflictError("No selected customer has recorded WhatsApp marketing opt-in");
     await this.store.batchUpdate(COLLECTIONS.campaignEnrollments, enrollmentItems);
-    const stats = { ...emptyStats(), total: audience.contacts.length, eligible, active: eligible, suppressed, skipped: suppressed };
+    const stats = {
+      ...emptyStats(),
+      total: audience.contacts.length,
+      eligible,
+      active: eligible - waiting,
+      waiting,
+      suppressed,
+      skipped: suppressed
+    };
     await this.store.update(COLLECTIONS.marketingCampaigns, campaignId, { status: "ACTIVE", lifecycleStatus: "RUNNING", startAt, launchedAt: now(), startedAt: now(), launchedBy: actor.userId || "SYSTEM", stats, updatedAt: now() });
     await this.audit.write({ orgId, actorId: actor.userId || "SYSTEM", action: "MARKETING_CAMPAIGN_LAUNCHED", entityType: "MARKETING_CAMPAIGN", entityId: campaignId, after: { startAt, stats } });
     return this.getCampaign(orgId, campaignId);
   }
 
   async pauseCampaign(orgId, campaignId, actor = {}) {
-    const campaign = await this.getCampaign(orgId, campaignId);
+    const campaign = await this.getCampaign(orgId, campaignId, { actor });
     if (!RUNNING_CAMPAIGN_STATUSES.has(campaign.status)) throw new ConflictError("Only an active campaign can be paused");
     await this.moveCampaignEnrollments(orgId, campaignId, "ACTIVE", "PAUSED", { nextRunAt: null });
     await this.store.update(COLLECTIONS.marketingCampaigns, campaignId, { status: "PAUSED", lifecycleStatus: "PAUSED", pausedAt: now(), updatedAt: now() });
@@ -442,7 +568,7 @@ export class MarketingService {
   }
 
   async resumeCampaign(orgId, campaignId, actor = {}) {
-    const campaign = await this.getCampaign(orgId, campaignId);
+    const campaign = await this.getCampaign(orgId, campaignId, { actor });
     if (campaign.status !== "PAUSED") throw new ConflictError("Only a paused campaign can be resumed");
     await this.moveCampaignEnrollments(orgId, campaignId, "PAUSED", "ACTIVE", { nextRunAt: now() });
     await this.store.update(COLLECTIONS.marketingCampaigns, campaignId, { status: "ACTIVE", lifecycleStatus: "RUNNING", resumedAt: now(), updatedAt: now() });
@@ -451,10 +577,10 @@ export class MarketingService {
   }
 
   async cancelCampaign(orgId, campaignId, actor = {}) {
-    const campaign = await this.getCampaign(orgId, campaignId);
+    const campaign = await this.getCampaign(orgId, campaignId, { actor });
     if (["COMPLETED", "CANCELLED"].includes(campaign.status)) throw new ConflictError("Campaign is already finished");
     const result = await this.store.find(COLLECTIONS.campaignEnrollments, { filters: [["campaignId", "==", campaignId]], limit: MAX_AUDIENCE_SIZE });
-    const active = result.items.filter((item) => item.orgId === orgId && ["ACTIVE", "PROCESSING", "PAUSED"].includes(item.status));
+    const active = result.items.filter((item) => item.orgId === orgId && ["ACTIVE", "PROCESSING", "WAITING_FOR_WINDOW", "PAUSED"].includes(item.status));
     if (active.length) {
       await this.store.batchUpdate(COLLECTIONS.campaignEnrollments, active.map((item) => ({
         id: item.campaignEnrollmentId || item.id,
@@ -464,7 +590,13 @@ export class MarketingService {
     await this.store.update(COLLECTIONS.marketingCampaigns, campaignId, {
       status: "CANCELLED",
       lifecycleStatus: "CANCELLED",
-      stats: { ...emptyStats(), ...(campaign.stats || {}), active: Math.max(0, Number(campaign.stats?.active || 0) - active.length), cancelled: active.length },
+      stats: {
+        ...emptyStats(),
+        ...(campaign.stats || {}),
+        active: 0,
+        waiting: 0,
+        cancelled: active.length
+      },
       cancelledAt: now(),
       cancelledBy: actor.userId || "SYSTEM",
       updatedAt: now()
@@ -524,6 +656,13 @@ export class MarketingService {
       const step = campaign.steps[claimed.currentStepIndex];
       if (!step) return this.finishEnrollment(claimed, "COMPLETED", { nextRunAt: null }, { active: -1, completed: 1 }, "PROCESSING");
       const conversation = await this.ensureWhatsappConversation(claimed.orgId, contact);
+      if (campaign.deliveryMode === "OPEN_WINDOW_ONLY" && !serviceWindowForContact(contact, now(), conversation).open) {
+        return this.finishEnrollment(claimed, "WAITING_FOR_WINDOW", {
+          waitingReason: "SERVICE_WINDOW_CLOSED",
+          nextRunAt: null,
+          lockedAt: null
+        }, { active: -1, waiting: 1 }, "PROCESSING");
+      }
       const prepared = this.templates.prepare(campaign.templateId, {
         customer_name: customerName(contact),
         interest: campaign.interestLabel,
@@ -539,6 +678,9 @@ export class MarketingService {
           eventType: "CAMPAIGN_MESSAGE",
           messageIntent: campaign.interestLabel,
           isPromotional: true,
+          textMessage: step.messageLine,
+          messageType: step.messageType || "TEXT",
+          attachmentIds: step.attachmentIds || [],
           templateKey: campaign.templateId,
           templateData: prepared.metadata.templateValues,
           campaignId: campaign.campaignId,
@@ -546,14 +688,17 @@ export class MarketingService {
           metadata: {
             campaignId: campaign.campaignId,
             campaignEnrollmentId: enrollmentId,
-            campaignStepId: step.stepId
+            campaignStepId: step.stepId,
+            deliveryMode: campaign.deliveryMode,
+            marketingContent: true
           }
         }, { userId: "MARKETING_CAMPAIGN" })
         : await this.messages.queueOutbound({
           orgId: claimed.orgId,
           conversationId: conversation.conversationId,
-          text: prepared.text,
-          type: prepared.type,
+          text: campaign.deliveryMode === "OPEN_WINDOW_ONLY" ? step.messageLine : prepared.text,
+          type: campaign.deliveryMode === "OPEN_WINDOW_ONLY" ? (step.messageType || "TEXT") : prepared.type,
+          attachmentIds: campaign.deliveryMode === "OPEN_WINDOW_ONLY" ? (step.attachmentIds || []) : [],
           metadata: {
             ...prepared.metadata,
             campaignId: campaign.campaignId,
@@ -577,7 +722,7 @@ export class MarketingService {
       return this.finishEnrollment(claimed, completed ? "COMPLETED" : "ACTIVE", {
         conversationId: conversation.conversationId,
         currentStepIndex: nextIndex,
-        nextRunAt: completed ? null : addDays(now(), nextStep.delayDays),
+        nextRunAt: completed ? null : addStepDelay(now(), nextStep),
         sentCount: Number(claimed.sentCount || 0) + 1,
         lastMessageId: result.messageId || result.message?.messageId || claimed.lastMessageId,
         lockedAt: null
@@ -605,28 +750,98 @@ export class MarketingService {
     if (optedIn) {
       await this.recordConsent(orgId, contactId, { status: "OPTED_IN", source: "WHATSAPP_REPLY", note: `Customer explicitly replied ${text}` });
     }
+    const activated = await this.activateWaitingEnrollments(orgId, contactId, message);
     const context = await this.findContactCampaignContext(orgId, contactId);
-    if (!context) return { optedOut: false, optedIn, campaignReply: false, pausedCampaigns: 0 };
+    if (!context) return { optedOut: false, optedIn, campaignReply: activated.length > 0, activatedCampaigns: activated.length, pausedCampaigns: 0 };
     const changed = await this.stopContactEnrollments(orgId, contactId, "PAUSED_REPLIED", {
       replyMessageId: message?.messageId || null,
       conversationId: message?.conversationId || null
-    });
+    }, { excludeEnrollmentIds: activated });
     return {
       optedOut: false,
       optedIn,
       campaignReply: true,
+      activatedCampaigns: activated.length,
       pausedCampaigns: changed,
       campaignId: context.campaignId || null,
       campaignEnrollmentId: context.campaignEnrollmentId || context.id || null
     };
   }
 
+  async activateWaitingEnrollments(orgId, contactId, message = {}) {
+    const result = await this.store.find(COLLECTIONS.campaignEnrollments, {
+      filters: [["contactId", "==", contactId]],
+      limit: MAX_AUDIENCE_SIZE
+    });
+    const waiting = result.items.filter((item) => item.orgId === orgId && item.status === "WAITING_FOR_WINDOW");
+    const activated = [];
+    for (const enrollment of waiting) {
+      const campaign = await this.getCampaign(orgId, enrollment.campaignId);
+      if (!RUNNING_CAMPAIGN_STATUSES.has(campaign.status) || campaign.deliveryMode !== "OPEN_WINDOW_ONLY") continue;
+      const step = campaign.steps[enrollment.currentStepIndex || 0];
+      if (!step) continue;
+      const enrollmentId = enrollment.campaignEnrollmentId || enrollment.id;
+      const changed = await this.store.runTransaction(async (tx) => {
+        const current = await tx.get(COLLECTIONS.campaignEnrollments, enrollmentId);
+        if (!current || current.status !== "WAITING_FOR_WINDOW") return false;
+        tx.update(COLLECTIONS.campaignEnrollments, enrollmentId, {
+          status: "ACTIVE",
+          waitingReason: null,
+          conversationId: message.conversationId || current.conversationId || null,
+          nextRunAt: addStepDelay(now(), step),
+          activatedByMessageId: message.messageId || null,
+          activatedAt: now(),
+          updatedAt: now()
+        });
+        return true;
+      });
+      if (changed) {
+        await this.incrementCampaignStats(campaign.campaignId, { waiting: -1, active: 1 });
+        activated.push(enrollmentId);
+      }
+    }
+    return activated;
+  }
+
   async attributeOrder(orgId, contactId, orderId) {
     const changed = await this.stopContactEnrollments(orgId, contactId, "CONVERTED", { orderId, convertedAt: now() });
+    const owner = await this.segmentOwner(orgId, "EXISTING_CLIENT");
+    const timestamp = now();
+    await this.store.update(COLLECTIONS.contacts, contactId, {
+      relationshipType: "EXISTING_CLIENT",
+      ...(owner ? { assignedTo: owner.userId || owner.id, salesPersonName: owner.name || "Ankit" } : {}),
+      updatedAt: timestamp
+    });
+    const [conversations, leads] = await Promise.all([
+      this.store.find(COLLECTIONS.conversations, { filters: [["contactId", "==", contactId]], limit: MAX_AUDIENCE_SIZE }),
+      this.store.find(COLLECTIONS.leads, { filters: [["contactId", "==", contactId]], limit: MAX_AUDIENCE_SIZE })
+    ]);
+    if (conversations.items.length) {
+      await this.store.batchUpdate(COLLECTIONS.conversations, conversations.items
+        .filter((item) => item.orgId === orgId)
+        .map((item) => ({
+          id: item.conversationId || item.id,
+          data: {
+            contactRelationshipType: "EXISTING_CLIENT",
+            ...(owner ? { assignedTo: owner.userId || owner.id } : {}),
+            updatedAt: timestamp
+          }
+        })));
+    }
+    if (leads.items.length && owner) {
+      await this.store.batchUpdate(COLLECTIONS.leads, leads.items
+        .filter((item) => item.orgId === orgId)
+        .map((item) => ({
+          id: item.leadId || item.id,
+          data: { assignedTo: owner.userId || owner.id, updatedAt: timestamp }
+        })));
+    }
     const prospect = await this.store.get(COLLECTIONS.marketingProspects, contactId);
     if (prospect?.orgId === orgId) {
       await this.store.update(COLLECTIONS.marketingProspects, contactId, {
         converted: true,
+        relationshipType: "EXISTING_CLIENT",
+        ...(owner ? { assignedTo: owner.userId || owner.id } : {}),
         lastOrderId: orderId,
         convertedAt: now(),
         updatedAt: now()
@@ -635,16 +850,23 @@ export class MarketingService {
     return { convertedCampaigns: changed };
   }
 
-  async stopContactEnrollments(orgId, contactId, targetStatus, patch = {}) {
+  async stopContactEnrollments(orgId, contactId, targetStatus, patch = {}, options = {}) {
     const result = await this.store.find(COLLECTIONS.campaignEnrollments, {
       filters: [["contactId", "==", contactId]],
       limit: MAX_AUDIENCE_SIZE
     });
     let changed = 0;
-    for (const enrollment of result.items.filter((item) => item.orgId === orgId && ACTIVE_ENROLLMENT_STATUSES.has(item.status) && item.status !== targetStatus)) {
+    const excluded = new Set(options.excludeEnrollmentIds || []);
+    for (const enrollment of result.items.filter((item) => (
+      item.orgId === orgId
+      && ACTIVE_ENROLLMENT_STATUSES.has(item.status)
+      && item.status !== targetStatus
+      && !excluded.has(item.campaignEnrollmentId || item.id)
+    ))) {
       const fromActive = ["ACTIVE", "PROCESSING", "PAUSED"].includes(enrollment.status);
       const delta = {};
       if (fromActive) delta.active = -1;
+      if (enrollment.status === "WAITING_FOR_WINDOW") delta.waiting = -1;
       if (targetStatus === "PAUSED_REPLIED") delta.replied = 1;
       if (targetStatus === "CONVERTED") delta.converted = 1;
       if (targetStatus === "OPTED_OUT") delta.optedOut = 1;
@@ -674,7 +896,7 @@ export class MarketingService {
       const stats = { ...emptyStats(), ...(campaign.stats || {}) };
       for (const [key, value] of Object.entries(delta)) stats[key] = Math.max(0, Number(stats[key] || 0) + Number(value || 0));
       const patch = { stats, updatedAt: now() };
-      if (RUNNING_CAMPAIGN_STATUSES.has(campaign.status) && stats.eligible > 0 && stats.active === 0) {
+      if (RUNNING_CAMPAIGN_STATUSES.has(campaign.status) && stats.eligible > 0 && stats.active === 0 && stats.waiting === 0) {
         patch.status = "COMPLETED";
         patch.lifecycleStatus = "COMPLETED";
         patch.completedAt = now();
@@ -714,6 +936,7 @@ export class MarketingService {
       contactId: contact.contactId,
       channel: "WHATSAPP",
       channelAccountId: identity.channelAccountId || account.channelAccountId || account.id,
+      contactRelationshipType: contact.relationshipType || "PROSPECT",
       assignedTo: contact.assignedTo || null
     });
   }
@@ -723,6 +946,51 @@ export class MarketingService {
     const valid = new Set(contacts.filter((item) => item.orgId === orgId).map((item) => item.contactId || item.id));
     const missing = contactIds.filter((contactId) => !valid.has(contactId));
     if (missing.length) throw new ConflictError(`${missing.length} selected customer record(s) are unavailable`);
+    return contacts.filter((item) => item.orgId === orgId);
+  }
+
+  assertActorRelationship(actor = {}, relationshipType) {
+    if (actor.role !== "SALES") return;
+    const scope = resolveClientScope(actor);
+    if (scope === CLIENT_SCOPES.ASSIGNED) return;
+    if (relationshipType === "MIXED" || !canAccessRelationship(scope, relationshipType)) {
+      throw new ConflictError("This client segment belongs to another team member");
+    }
+  }
+
+  filterForActor(items, actor = {}) {
+    if (actor.role !== "SALES") return items;
+    const scope = resolveClientScope(actor);
+    if (scope === CLIENT_SCOPES.ASSIGNED) {
+      return items.filter((item) => item.createdBy === actor.userId || item.assignedTo === actor.userId);
+    }
+    const allowedTypes = relationshipTypesForScope(scope);
+    return items.filter((item) => allowedTypes.includes(item.relationshipType || "PROSPECT"));
+  }
+
+  async assertCampaignAttachments(orgId, steps = []) {
+    const ids = unique(steps.flatMap((step) => step.attachmentIds || []));
+    if (!ids.length) return;
+    const attachments = await this.store.getMany(COLLECTIONS.attachments, ids);
+    const valid = new Set(attachments
+      .filter((item) => item.orgId === orgId && item.purpose === "MARKETING_ASSET")
+      .map((item) => item.attachmentId || item.id));
+    const missing = ids.filter((id) => !valid.has(id));
+    if (missing.length) throw new ConflictError("Upload campaign media through the Marketing media picker before saving the drip");
+  }
+
+  async segmentOwner(orgId, relationshipType) {
+    const targetEmail = normalizeSegment(relationshipType) === "EXISTING_CLIENT"
+      ? "ankit@rxdesignhub.com"
+      : "reshu@rxdesignhub.com";
+    const result = await this.store.find(COLLECTIONS.users, {
+      filters: [["orgId", "==", orgId]],
+      limit: 100
+    });
+    return result.items.find((user) => (
+      user.active !== false
+      && String(user.email || "").trim().toLowerCase() === targetEmail
+    )) || null;
   }
 }
 
@@ -730,8 +998,9 @@ function unique(values = []) {
   return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
 }
 
-function addDays(date, days) {
-  return new Date(toDate(date).getTime() + Number(days || 0) * 24 * 60 * 60 * 1000);
+function addStepDelay(date, step = {}) {
+  const minutes = step.delayMinutes ?? Number(step.delayDays || 0) * 24 * 60;
+  return new Date(toDate(date).getTime() + Number(minutes || 0) * 60 * 1000);
 }
 
 function customerName(contact) {
@@ -759,6 +1028,7 @@ function contactSummary(contact) {
     contactPerson: contact.contactPerson || "",
     primaryPhone: contact.primaryPhone || "",
     city: contact.city || "",
+    relationshipType: contact.relationshipType || "PROSPECT",
     status: contact.status || "ACTIVE",
     assignedTo: contact.assignedTo || null,
     marketingConsent: contact.marketingConsent || null,
@@ -768,6 +1038,8 @@ function contactSummary(contact) {
     lastMarketingMessageAt: contact.lastMarketingMessageAt || null,
     lastMarketingTemplateKey: contact.lastMarketingTemplateKey || null,
     marketingSendHistory: contact.marketingSendHistory || [],
+    lastUserMessageAt: contact.lastUserMessageAt || null,
+    serviceWindowExpiresAt: contact.serviceWindowExpiresAt || null,
     eligibleForMarketing: marketingEligible(contact),
     marketingSuppressionReason: marketingEligible(contact) ? null : eligibilityReason(contact)
   };
@@ -779,7 +1051,25 @@ function eligibilitySummary(contacts) {
 }
 
 function emptyStats() {
-  return { total: 0, eligible: 0, active: 0, suppressed: 0, sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0, replied: 0, converted: 0, completed: 0, cancelled: 0, optedOut: 0 };
+  return { total: 0, eligible: 0, active: 0, waiting: 0, suppressed: 0, sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0, replied: 0, converted: 0, completed: 0, cancelled: 0, optedOut: 0 };
+}
+
+function serviceWindowForContact(contact, current = new Date(), conversation = null) {
+  const currentDate = toDate(current) || new Date();
+  const explicit = toDate(contact.serviceWindowExpiresAt);
+  if (explicit) return { open: explicit.getTime() > currentDate.getTime(), expiresAt: explicit };
+  return customerServiceWindow(contact.lastUserMessageAt || conversation?.lastInboundAt, currentDate.getTime());
+}
+
+function singleSegment(contacts) {
+  const segments = new Set(contacts.map((contact) => normalizeSegment(contact.relationshipType) || "PROSPECT"));
+  return segments.size === 1 ? [...segments][0] : null;
+}
+
+function chunk(items, size) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
 }
 
 function normalizeConsentText(value) {

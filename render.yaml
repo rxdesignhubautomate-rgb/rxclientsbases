@@ -35,9 +35,9 @@ services:
       - key: MEDIA_POLL_INTERVAL_MS
         value: "60000"
       - key: CAMPAIGN_POLL_INTERVAL_MS
-        value: "300000"
+        value: "60000"
       - key: CAMPAIGN_BATCH_SIZE
-        value: "20"
+        value: "100"
       - key: CAMPAIGN_WORKER_MODE
         value: internal
       - key: CAMPAIGN_DELAY_MS

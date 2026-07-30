@@ -104,7 +104,7 @@ export class SmartMessageService {
         messageId,
         updatedAt: now()
       });
-      if (decision.mode === MESSAGE_MODES.MARKETING) {
+      if (decision.mode === MESSAGE_MODES.MARKETING || input.isPromotional === true) {
         await this.recordMarketingQueued(evaluated.context, decision.templateKey, input.now);
       }
       if (decision.requiresTemplate) await this.recordTemplateQueued(evaluated.context, decision, prepared.metadata?.template, input);
@@ -286,6 +286,7 @@ export class SmartMessageService {
       leadId: null,
       channel: "WHATSAPP",
       channelAccountId: identity.channelAccountId || account.channelAccountId || account.id,
+      contactRelationshipType: contact.relationshipType || "PROSPECT",
       assignedTo: contact.assignedTo || null
     });
   }

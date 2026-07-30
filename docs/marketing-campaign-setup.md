@@ -44,12 +44,14 @@ Keep all existing Firebase and Meta variables, then add or verify:
 
 ```env
 WORKERS_ENABLED=true
-CAMPAIGN_POLL_INTERVAL_MS=300000
-CAMPAIGN_BATCH_SIZE=20
+CAMPAIGN_POLL_INTERVAL_MS=60000
+CAMPAIGN_BATCH_SIZE=100
 OUTBOX_POLL_INTERVAL_MS=15000
 ```
 
-`300000` means the campaign scheduler checks every five minutes. This keeps idle Firestore reads low while preserving practical campaign timing. The existing outbox still attempts delivery every 15 seconds after a campaign message is queued.
+`60000` means the campaign scheduler checks once per minute and claims at most 100 due enrollments per tick. Audience creation still limits every campaign list to 500 contacts. The existing outbox attempts delivery every 15 seconds, so a 500-contact batch is drained gradually instead of creating a single synchronous API burst.
+
+For media drips, choose `OPEN_WINDOW_ONLY`. The campaign may contain image, video, audio, or document steps, but those steps are queued only while the customer's genuine 24-hour service window is open. Closed enrollments move to `WAITING_FOR_WINDOW`; a new inbound reply activates the next due step. Use `CUSTOMER_REPLY` when the first step must wait for a new reply as well.
 
 Deploy the backend and confirm `/health` is ready before deploying the frontend.
 
