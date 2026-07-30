@@ -795,7 +795,10 @@ export class MarketingService {
         interest: campaign.interestLabel,
         message_line: step.messageLine
       });
-      if (this.templateRegistry && !this.smartMessages) await this.templateRegistry.assertApproved(claimed.orgId, campaign.templateId);
+      const approvedTemplate = this.templateRegistry && !this.smartMessages
+        ? await this.templateRegistry.assertApproved(claimed.orgId, campaign.templateId)
+        : null;
+      useProviderTemplateLanguage(prepared, approvedTemplate);
       const latest = await this.store.get(COLLECTIONS.campaignEnrollments, enrollmentId);
       if (latest?.status !== "PROCESSING") return { enrollmentId, status: latest?.status || "SKIPPED" };
       const result = this.smartMessages
@@ -1133,6 +1136,13 @@ export class MarketingService {
       user.active !== false
       && String(user.email || "").trim().toLowerCase() === targetEmail
     )) || null;
+  }
+}
+
+function useProviderTemplateLanguage(prepared, approvedTemplate) {
+  const language = String(approvedTemplate?.language || "").trim();
+  if (language && prepared?.metadata?.template?.language) {
+    prepared.metadata.template.language.code = language;
   }
 }
 

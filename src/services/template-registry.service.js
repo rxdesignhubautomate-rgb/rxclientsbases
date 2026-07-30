@@ -14,7 +14,7 @@ export class TemplateRegistryService {
   }
 
   listConfigured() {
-    return Object.values(this.templates).map(publicTemplate);
+    return syncableTemplates(this.templates).map(publicTemplate);
   }
 
   resolve(templateKey, expectedCategory = null) {
@@ -54,7 +54,17 @@ export class TemplateRegistryService {
 
   async getStatus(orgId, name, language = "en") {
     const record = await this.store.get(COLLECTIONS.templateRegistry, templateDocumentId(orgId, name, language));
-    return record?.orgId === orgId ? record : null;
+    if (record?.orgId === orgId) return record;
+
+    // Meta commonly returns a regional language code (for example en_US) even
+    // when the CRM is configured with the generic English code (en). Fall back
+    // only when there is a single unambiguous language-family match.
+    const registry = await this.store.find(COLLECTIONS.templateRegistry, {
+      filters: [["orgId", "==", orgId]],
+      limit: 500
+    });
+    const sameName = registry.items.filter((item) => normalize(item.name) === normalize(name));
+    return findLanguageMatch(sameName, language);
   }
 
   async assertApproved(orgId, templateOrKey) {
@@ -236,13 +246,14 @@ function configuredTemplateStatus(templates, remoteTemplates) {
     status: String(template.status || "UNKNOWN").toUpperCase()
   }));
 
-  return Object.values(templates).map((template) => {
+  return syncableTemplates(templates).map((template) => {
     const sameName = remote.filter((candidate) => normalize(candidate.name) === normalize(template.name));
-    const exact = sameName.find((candidate) => normalize(candidate.language) === normalize(template.language));
+    const exact = findLanguageMatch(sameName, template.language);
     return {
       key: template.key,
       name: template.name,
       language: template.language,
+      providerLanguage: exact?.language || null,
       category: template.category,
       matched: Boolean(exact),
       status: exact?.status || "NOT_SYNCED",
@@ -327,6 +338,26 @@ function safeOperationalMessage(error) {
 
 function normalize(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function syncableTemplates(templates) {
+  return Object.values(templates).filter((template) => template.syncRequired !== false);
+}
+
+function findLanguageMatch(candidates, expectedLanguage) {
+  const expected = normalizeLanguage(expectedLanguage);
+  const exact = candidates.find((candidate) => normalizeLanguage(candidate.language) === expected);
+  if (exact) return exact;
+  const family = candidates.filter((candidate) => languageBase(candidate.language) === languageBase(expected));
+  return family.length === 1 ? family[0] : null;
+}
+
+function normalizeLanguage(value) {
+  return normalize(value).replaceAll("-", "_");
+}
+
+function languageBase(value) {
+  return normalizeLanguage(value).split("_")[0];
 }
 
 function maskBusinessAccountId(value) {

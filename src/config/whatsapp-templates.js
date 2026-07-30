@@ -23,9 +23,16 @@ const DEFAULT_TEMPLATES = Object.freeze({
     ["customer_name", "order_reference"],
     "EXPERIENCE_FEEDBACK"
   ),
-  LEAD_REENGAGEMENT: marketing("lead_reengagement_v1", "Hello {{1}}, you previously showed interest in {{2}}. {{3}} Reply STOP to opt out.", [
-    "customer_name", "interest", "message_line"
-  ]),
+  // Kept only so historical campaign records can still be read. It is not a
+  // current Meta template and therefore must not appear as "Not synced".
+  LEAD_REENGAGEMENT: defineTemplate({
+    name: "lead_reengagement_v1",
+    body: "Hello {{1}}, you previously showed interest in {{2}}. {{3}} Reply STOP to opt out.",
+    variables: ["customer_name", "interest", "message_line"],
+    category: "MARKETING",
+    syncRequired: false,
+    visible: false
+  }),
   interest_followup: marketing(
     "1_marketing",
     [
@@ -75,7 +82,16 @@ function marketing(name, body, variables, eventType = null, header = null) {
   return defineTemplate({ name, body, variables, category: "MARKETING", eventType, header });
 }
 
-function defineTemplate({ name, body, variables, category, eventType, header = null }) {
+function defineTemplate({
+  name,
+  body,
+  variables,
+  category,
+  eventType,
+  header = null,
+  syncRequired = true,
+  visible = true
+}) {
   return Object.freeze({
     name,
     language: "en",
@@ -83,6 +99,8 @@ function defineTemplate({ name, body, variables, category, eventType, header = n
     eventType,
     body,
     header: header ? Object.freeze(header) : null,
+    syncRequired,
+    visible,
     variables: Object.freeze(variables.map((key) => Object.freeze({ key, label: labelFor(key) })))
   });
 }

@@ -9,7 +9,7 @@ export class MarketingTemplateService {
 
   list() {
     return Object.values(this.templates)
-      .filter((template) => template.category === "MARKETING")
+      .filter((template) => template.category === "MARKETING" && template.visible !== false)
       .map((template) => ({
         id: template.key,
         name: template.name,

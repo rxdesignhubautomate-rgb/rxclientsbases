@@ -54,6 +54,43 @@ describe("audited smart send", () => {
     expect((await core.store.find("outbox", { limit: 10 })).items).toHaveLength(0);
   });
 
+  it("sends with the exact approved Meta regional language code", async () => {
+    const core = makeCore();
+    const seeded = await seedConversation(core);
+    await core.store.update("conversations", seeded.conversation.conversationId, {
+      lastInboundAt: new Date(Date.now() - 25 * 60 * 60 * 1000)
+    });
+    await core.store.set("orders", "ORD_LANGUAGE", {
+      orderId: "ORD_LANGUAGE",
+      orgId: "RXDH",
+      contactId: seeded.contact.contactId,
+      status: "CONFIRMED"
+    });
+    const smart = makeSmart(core, {
+      assertApproved: async () => ({ status: "APPROVED", language: "en_US" })
+    });
+
+    const result = await smart.smartSend("RXDH", {
+      contactId: seeded.contact.contactId,
+      conversationId: seeded.conversation.conversationId,
+      eventType: "ORDER_CONFIRMATION",
+      orderId: "ORD_LANGUAGE",
+      templateKey: "order_confirmation",
+      templateData: {
+        customer_name: "Rahul",
+        order_reference: "ORD_LANGUAGE",
+        order_value: "INR 1000"
+      }
+    });
+
+    expect(result).toMatchObject({ queued: true, mode: "UTILITY_TEMPLATE" });
+    const messages = await core.store.find("messages", {
+      filters: [["direction", "==", "OUTBOUND"]],
+      limit: 10
+    });
+    expect(messages.items[0].metadata.template.language.code).toBe("en_US");
+  });
+
   it("preserves structured WhatsApp payloads through the policy layer", async () => {
     const core = makeCore();
     const seeded = await seedConversation(core);

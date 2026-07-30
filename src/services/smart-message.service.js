@@ -51,9 +51,10 @@ export class SmartMessageService {
   async smartSend(orgId, input, actor = {}) {
     let evaluated = await this.decide(orgId, input);
     let { decision } = evaluated;
+    let approvedTemplate = null;
     if (decision.allowed && decision.requiresTemplate) {
       try {
-        await this.templateRegistry.assertApproved(orgId, decision.templateKey);
+        approvedTemplate = await this.templateRegistry.assertApproved(orgId, decision.templateKey);
       } catch (error) {
         decision = blockedDecision(decision, `TEMPLATE_NOT_APPROVED:${error.message}`);
         evaluated = { ...evaluated, decision };
@@ -76,6 +77,7 @@ export class SmartMessageService {
     try {
       const conversation = await this.ensureConversation(orgId, evaluated.context.contact, input.conversationId);
       const prepared = this.prepareMessage(decision, input, evaluated.context);
+      useProviderTemplateLanguage(prepared, approvedTemplate);
       const result = await this.messages.queueOutbound({
         orgId,
         conversationId: conversation.conversationId,
@@ -374,6 +376,13 @@ export class SmartMessageService {
     const value = { mode: decision.mode, reason: decision.reason, auditId, messageId, decidedAt: now() };
     await this.store.update(COLLECTIONS.contacts, context.contact.contactId, { lastMessageDecision: value, updatedAt: now() });
     if (context.lead?.leadId) await this.store.update(COLLECTIONS.leads, context.lead.leadId, { lastMessageDecision: value, updatedAt: now() });
+  }
+}
+
+function useProviderTemplateLanguage(prepared, approvedTemplate) {
+  const language = String(approvedTemplate?.language || "").trim();
+  if (language && prepared?.metadata?.template?.language) {
+    prepared.metadata.template.language.code = language;
   }
 }
 

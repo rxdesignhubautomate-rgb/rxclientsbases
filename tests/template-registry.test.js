@@ -18,7 +18,7 @@ describe("Meta template registry", () => {
     });
     expect(await service.syncFromMeta("RXDH")).toMatchObject({
       synced: 2,
-      matched: 2,
+      matched: 1,
       approved: 1,
       missing: 4
     });
@@ -164,7 +164,7 @@ describe("Meta template registry", () => {
     });
   });
 
-  it("reports configured template language mismatches when nothing can be matched", async () => {
+  it("matches a single regional Meta language and returns its provider language for sending", async () => {
     const service = new TemplateRegistryService({
       store: new MemoryStore(),
       businessAccountId: "123456789012345",
@@ -175,27 +175,37 @@ describe("Meta template registry", () => {
       }
     });
 
-    let caught;
-    try {
-      await service.syncFromMeta("RXDH");
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toMatchObject({
-      code: "META_TEMPLATES_NOT_MATCHED",
-      status: 424,
-      details: {
-        wabaIdEnding: "2345",
-        remoteTemplateCount: 1,
-        expectedTemplates: expect.any(Array),
-        receivedTemplates: [
-          { name: "rx_order_confirmation", language: "en_US", status: "APPROVED" }
+    const result = await service.syncFromMeta("RXDH");
+
+    expect(result).toMatchObject({ synced: 1, matched: 1, approved: 1, missing: 4 });
+    expect(result.configured[0]).toMatchObject({
+      name: "rx_order_confirmation",
+      language: "en",
+      providerLanguage: "en_US",
+      matched: true,
+      status: "APPROVED"
+    });
+    await expect(service.assertApproved("RXDH", "order_confirmation")).resolves.toMatchObject({
+      language: "en_US",
+      status: "APPROVED"
+    });
+  });
+
+  it("keeps multiple regional languages ambiguous until an exact override is configured", async () => {
+    const service = new TemplateRegistryService({
+      store: new MemoryStore(),
+      businessAccountId: "123456789012345",
+      whatsappAdapter: {
+        listMessageTemplates: async () => [
+          { id: "T1", name: "rx_order_confirmation", language: "en_US", category: "UTILITY", status: "APPROVED" },
+          { id: "T2", name: "rx_order_confirmation", language: "en_GB", category: "UTILITY", status: "APPROVED" }
         ]
       }
     });
-    expect(caught.message).toMatch(/expects en, but Meta has en_US/);
-    expect(caught.details.warnings).toEqual(expect.arrayContaining([
-      expect.stringMatching(/expects en, but Meta has en_US/)
-    ]));
+
+    await expect(service.syncFromMeta("RXDH")).rejects.toMatchObject({
+      code: "META_TEMPLATES_NOT_MATCHED",
+      status: 424
+    });
   });
 });
