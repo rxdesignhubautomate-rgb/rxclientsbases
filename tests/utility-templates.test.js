@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MarketingTemplateService } from "../src/services/marketing-template.service.js";
 import { UtilityTemplateService } from "../src/services/utility-template.service.js";
 import { makeCore, seedConversation } from "./helpers/core.js";
 
@@ -59,5 +60,22 @@ describe("WhatsApp utility templates", () => {
       metadata: { templateCategory: "UTILITY", template: { name: "rx_order_confirmation" } }
     });
     expect(queued.message.type).toBe("TEMPLATE");
+  });
+});
+
+describe("WhatsApp marketing templates", () => {
+  it("maps the approved 1_marketing video template with only the customer-name body variable", () => {
+    const service = new MarketingTemplateService();
+    const template = service.list().find((item) => item.id === "interest_followup");
+    const result = service.prepare("interest_followup", { customer_name: "Rahul" });
+
+    expect(template).toMatchObject({
+      name: "1_marketing",
+      header: { type: "VIDEO", required: true }
+    });
+    expect(result.metadata.template.components[0].parameters).toEqual([
+      { type: "text", text: "Rahul" }
+    ]);
+    expect(result.metadata.templateHeader).toEqual({ type: "VIDEO", required: true });
   });
 });

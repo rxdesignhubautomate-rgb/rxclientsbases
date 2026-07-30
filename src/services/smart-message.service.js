@@ -81,7 +81,9 @@ export class SmartMessageService {
         conversationId: conversation.conversationId,
         text: prepared.text,
         type: prepared.type,
-        attachmentIds: input.attachmentIds || [],
+        attachmentIds: decision.requiresTemplate
+          ? (input.templateAttachmentIds || [])
+          : (input.attachmentIds || []),
         replyToMessageId: input.replyToMessageId || input.metadata?.replyToMessageId || null,
         metadata: {
           ...(input.metadata || {}),

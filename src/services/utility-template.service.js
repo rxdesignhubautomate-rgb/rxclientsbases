@@ -53,6 +53,7 @@ export function prepareTemplate(template, templateId, values, idField = "templat
       templateKey: templateId,
       templateCategory: template.category,
       templateValues: normalized,
+      templateHeader: template.header || null,
       template: {
         name: template.name,
         language: { code: template.language },

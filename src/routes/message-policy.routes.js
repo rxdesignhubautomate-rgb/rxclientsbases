@@ -5,6 +5,7 @@ import { sendData, sendList } from "../utils/http.js";
 import { listQuery } from "../utils/pagination.js";
 import {
   campaignScheduleSchema,
+  directExistingCampaignSchema,
   marketingCampaignSchema,
   marketingLaunchSchema,
   orderConfirmationEventSchema,
@@ -40,6 +41,9 @@ export function messagePolicyRoutes(container) {
 
   router.post("/campaigns", validate(marketingCampaignSchema), wrap(async (req, res) => {
     return sendData(res, await container.marketing.createCampaign(req.auth.orgId, req.body, req.auth), 201);
+  }));
+  router.post("/campaigns/direct-existing", authorizeRole("OWNER", "ADMIN"), validate(directExistingCampaignSchema), wrap(async (req, res) => {
+    return sendData(res, await container.marketing.createDirectExistingCampaigns(req.auth.orgId, req.body, req.auth), 202);
   }));
   router.get("/campaigns", wrap(async (req, res) => {
     return sendList(res, await container.marketing.listCampaigns(req.auth.orgId, { ...listQuery(req.query), status: req.query.status, actor: req.auth }));

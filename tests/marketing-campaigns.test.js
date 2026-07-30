@@ -29,7 +29,7 @@ describe("WhatsApp marketing campaigns", () => {
       name: "Interest follow-up",
       audienceId: audience.audienceId,
       interestLabel: "premium catalogue",
-      templateId: "interest_followup",
+      templateId: "LEAD_REENGAGEMENT",
       steps: [{ delayDays: 0, messageLine: "Our team can share the latest options and pricing." }]
     });
 
@@ -47,6 +47,53 @@ describe("WhatsApp marketing campaigns", () => {
     expect(completed.stats).toMatchObject({ sent: 1, active: 0, completed: 1 });
   });
 
+  it("queues the approved 1_marketing template with its uploaded video header", async () => {
+    const core = makeCore();
+    const seeded = await seedConversation(core);
+    const marketing = makeMarketing(core);
+    await core.store.set("attachments", "ATT_APPROVED_TEMPLATE_VIDEO", {
+      attachmentId: "ATT_APPROVED_TEMPLATE_VIDEO",
+      orgId: "RXDH",
+      purpose: "MARKETING_ASSET",
+      filename: "approved-template.mp4",
+      mimeType: "video/mp4"
+    });
+    await marketing.recordConsent("RXDH", seeded.contact.contactId, {
+      status: "OPTED_IN",
+      source: "IN_PERSON",
+      note: "Requested marketing updates"
+    });
+    const audience = await marketing.createAudience("RXDH", {
+      name: "Approved template audience",
+      contactIds: [seeded.contact.contactId]
+    });
+    const campaign = await marketing.createCampaign("RXDH", {
+      name: "Approved video template",
+      audienceId: audience.audienceId,
+      interestLabel: "visual aid designing",
+      templateId: "interest_followup",
+      templateHeaderAttachmentId: "ATT_APPROVED_TEMPLATE_VIDEO",
+      steps: [{ delayDays: 0, messageLine: "Approved visual aid campaign" }]
+    });
+
+    await marketing.launchCampaign("RXDH", campaign.campaignId);
+    await marketing.processDue(10);
+
+    const messages = await core.store.find("messages", {
+      filters: [["direction", "==", "OUTBOUND"]],
+      limit: 10
+    });
+    expect(messages.items[0]).toMatchObject({
+      type: "TEMPLATE",
+      attachmentIds: ["ATT_APPROVED_TEMPLATE_VIDEO"],
+      metadata: {
+        templateHeader: { type: "VIDEO", required: true },
+        template: { name: "1_marketing" }
+      }
+    });
+    expect(messages.items[0].metadata.template.components[0].parameters).toHaveLength(1);
+  });
+
   it("pauses the remaining drip after a customer reply", async () => {
     const core = makeCore();
     const seeded = await seedConversation(core);
@@ -57,7 +104,7 @@ describe("WhatsApp marketing campaigns", () => {
       name: "Two touch follow-up",
       audienceId: audience.audienceId,
       interestLabel: "catalogue printing",
-      templateId: "interest_followup",
+      templateId: "LEAD_REENGAGEMENT",
       steps: [
         { delayDays: 0, messageLine: "Would you like the latest catalogue options?" },
         { delayDays: 3, messageLine: "We can help prepare a quotation when you are ready." }
@@ -93,7 +140,7 @@ describe("WhatsApp marketing campaigns", () => {
       name: "Reply qualification",
       audienceId: audience.audienceId,
       interestLabel: "catalogue printing",
-      templateId: "interest_followup",
+      templateId: "LEAD_REENGAGEMENT",
       steps: [{ delayDays: 0, messageLine: "Would you like a quotation?" }]
     });
     await marketing.launchCampaign("RXDH", campaign.campaignId);
@@ -176,7 +223,7 @@ describe("WhatsApp marketing campaigns", () => {
       name: "Index-safe campaign",
       audienceId: audience.audienceId,
       interestLabel: "catalogue printing",
-      templateId: "interest_followup",
+      templateId: "LEAD_REENGAGEMENT",
       steps: [{ delayDays: 0, messageLine: "We can share the available options." }]
     });
     await marketing.launchCampaign("RXDH", campaign.campaignId);
@@ -209,7 +256,7 @@ describe("WhatsApp marketing campaigns", () => {
       name: "Approval campaign",
       audienceId: audience.audienceId,
       interestLabel: "catalogue printing",
-      templateId: "interest_followup",
+      templateId: "LEAD_REENGAGEMENT",
       steps: [{ delayDays: 0, messageLine: "Would you like more details?" }]
     }, { userId: "USR_CREATOR" });
     await expect(marketing.startCampaign("RXDH", campaign.campaignId, {}, { userId: "USR_ADMIN" })).rejects.toThrow(/internally approved/);
@@ -246,6 +293,13 @@ describe("WhatsApp marketing campaigns", () => {
       createdAt: timestamp,
       updatedAt: timestamp
     });
+    const originalFind = core.store.find.bind(core.store);
+    core.store.find = async (collection, options = {}) => {
+      if (collection === "contacts" && ((options.filters || []).length > 1 || options.orderBy)) {
+        throw new Error("COMPOSITE_INDEX_REQUIRED");
+      }
+      return originalFind(collection, options);
+    };
     const marketing = makeMarketing(core);
     const result = await marketing.createSegmentBatches("RXDH", {
       name: "Prospect rollout",
@@ -269,6 +323,55 @@ describe("WhatsApp marketing campaigns", () => {
       role: "SALES",
       email: "reshu@rxdesignhub.com"
     })).rejects.toThrow(/another team member/);
+  });
+
+  it("schedules direct existing-client campaigns only for recorded opt-ins", async () => {
+    const core = makeCore();
+    const seeded = await seedConversation(core);
+    const second = await core.contacts.create("RXDH", {
+      contactPerson: "Existing Two",
+      primaryPhone: "9999999998",
+      relationshipType: "EXISTING_CLIENT"
+    });
+    await core.contacts.create("RXDH", {
+      contactPerson: "No Consent Existing",
+      primaryPhone: "9999999997",
+      relationshipType: "EXISTING_CLIENT"
+    });
+    await core.store.update("contacts", seeded.contact.contactId, {
+      relationshipType: "EXISTING_CLIENT"
+    });
+    const marketing = makeMarketing(core);
+    await marketing.recordConsent("RXDH", seeded.contact.contactId, {
+      status: "OPTED_IN",
+      source: "IN_PERSON",
+      note: "Requested updates"
+    });
+    await marketing.recordConsent("RXDH", second.contactId, {
+      status: "OPTED_IN",
+      source: "PHONE",
+      note: "Requested updates"
+    });
+
+    const result = await marketing.createDirectExistingCampaigns("RXDH", {
+      name: "Direct existing clients",
+      interestLabel: "visual aids",
+      templateId: "LEAD_REENGAGEMENT",
+      batchSize: 1,
+      intervalMinutes: 5,
+      messageLine: "Approved existing-client message",
+      confirmOptIn: true
+    }, { userId: "USR_ADMIN", role: "ADMIN" });
+
+    expect(result).toMatchObject({
+      relationshipType: "EXISTING_CLIENT",
+      totalContacts: 2,
+      batchCount: 2,
+      intervalMinutes: 5
+    });
+    expect(result.campaigns).toHaveLength(2);
+    expect(result.campaigns.every((campaign) => campaign.status === "SCHEDULED")).toBe(true);
+    expect(new Date(result.campaigns[1].startAt).getTime() - new Date(result.campaigns[0].startAt).getTime()).toBe(5 * 60 * 1000);
   });
 
   it("waits for a new customer reply before sending an open-window video drip", async () => {

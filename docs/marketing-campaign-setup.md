@@ -12,18 +12,31 @@ Open **WhatsApp Manager -> Account tools -> Message templates -> Create template
 
 - Category: **Marketing**
 - Language: **English (`en`)**
-- Name: **`rx_interest_followup`**
+- Name: **`1_marketing`**
+- Header: **Video**
 - Body:
 
 ```text
-Hello {{1}}, you previously showed interest in {{2}}. {{3}} If you would like details or help placing an order, reply to this message. Reply STOP to opt out.
+Hello {{1}} 👋
+
+Doctors ke saamne apne pharma brands ko professionally present kijiye with premium Visual Aid Designing & Printing by RX Design Hub.
+
+✅ Scientific content support
+✅ Premium doctor-engaging design
+✅ Gloss, Matte, Velvet & UV finishing
+✅ PAN-India delivery
+
+Sirf Brand Name aur Composition share kijiye—baaki designing aur visual development hamari team karegi.
+
+Kya aap latest samples aur pricing dekhna chahenge?
+
+Reply STOP TO STOP RECEIVING FROM US
 ```
 
-The variables are:
-
-1. customer name;
-2. the interest label entered in the campaign builder;
-3. the campaign step line.
+The only body variable is `{{1}}`, the customer name. Configure the static website,
+phone and STOP buttons in Meta. The CRM does not send separate button parameters.
+When creating a campaign, upload the video file used by the approved template; the
+backend uploads it to Meta and builds the required video header component.
 
 Wait until Meta shows the template as **Approved**. Keep the name, language and body exactly aligned with the CRM. This is a Marketing template; do not create it as Utility.
 
@@ -64,12 +77,14 @@ Deploy the matching frontend build. Marketing is visible only to Owner/Admin acc
 1. Open **Marketing**.
 2. Choose the true consent source and use **Record opt-in** only for customers who actually agreed to receive this type of message.
 3. Select interested customers and save a list.
-4. Choose the list, add one to three drip steps, select the start time, confirm consent and schedule.
+4. Choose the list, select `1_marketing`, upload its approved video, add the required steps, select the start time, confirm consent and schedule.
 5. Monitor sent, replied, skipped and order counters.
 6. Handle replies in **WhatsApp Inbox**. The customer's remaining drip is already paused.
 7. Create their order in the CRM; the campaign is attributed and marked converted automatically.
 
 Selecting a customer for a list does not create consent. Contacts with missing consent, an opt-out, no phone number, or an inactive status are skipped at launch.
+
+For a one-time send to every eligible existing client, Owner/Admin can use **One-click existing client send**. Select `1_marketing`, upload the approved video once, keep batches at 500, choose the gap between batches, confirm the recorded-opt-in rule, and schedule. The backend creates and approves the batches automatically. Customers without existing opt-in are excluded rather than silently opted in.
 
 ## Operating rules
 

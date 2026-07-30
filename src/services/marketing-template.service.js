@@ -18,7 +18,8 @@ export class MarketingTemplateService {
         label: template.key === "interest_followup" ? "Interest follow-up" : template.key,
         description: template.body,
         body: template.body,
-        variables: template.variables
+        variables: template.variables,
+        header: template.header
       }));
   }
 

@@ -88,6 +88,51 @@ describe("outbox processing", () => {
     }));
   });
 
+  it("injects uploaded video into a Meta template header", async () => {
+    const core = makeCore();
+    const { conversation } = await seedConversation(core);
+    const attachment = {
+      attachmentId: "ATT_TEMPLATE_VIDEO",
+      orgId: "RXDH",
+      storagePath: "files/ATT_TEMPLATE_VIDEO.mp4",
+      mimeType: "video/mp4",
+      originalFilename: "campaign.mp4",
+      signedUrl: "https://storage.test/campaign.mp4",
+      providerMediaId: null
+    };
+    const queued = await core.messages.queueOutbound({
+      orgId: "RXDH",
+      conversationId: conversation.conversationId,
+      text: "Hello Rahul",
+      type: "TEMPLATE",
+      attachmentIds: [attachment.attachmentId],
+      metadata: {
+        templateHeader: { type: "VIDEO", required: true },
+        template: {
+          name: "1_marketing",
+          language: { code: "en" },
+          components: [{ type: "body", parameters: [{ type: "text", text: "Rahul" }] }]
+        }
+      }
+    });
+    const media = {
+      prepareForSend: vi.fn().mockResolvedValue([attachment]),
+      ensureProviderMediaId: vi.fn().mockResolvedValue("meta-template-video")
+    };
+    const send = vi.fn().mockResolvedValue({ providerMessageId: "wamid.template-video" });
+
+    await worker(core, send, { media }).processOne(queued.outbox);
+
+    const sent = send.mock.calls[0][0].message;
+    expect(sent.metadata.template.components).toEqual([
+      {
+        type: "header",
+        parameters: [{ type: "video", video: { id: "meta-template-video" } }]
+      },
+      { type: "body", parameters: [{ type: "text", text: "Rahul" }] }
+    ]);
+  });
+
   it("falls back to a signed link when Meta media upload fails", async () => {
     const core = makeCore();
     const { conversation } = await seedConversation(core);

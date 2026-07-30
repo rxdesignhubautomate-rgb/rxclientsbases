@@ -73,7 +73,8 @@ export class OutboundWorker {
       if (!message) throw permanentError("Outbound message no longer exists", "MESSAGE_NOT_FOUND");
       if (account.status !== "ACTIVE" || account.sendEnabled !== true) throw permanentError("Channel account is disabled", "ACCOUNT_DISABLED");
       const attachments = await this.media.prepareForSend(claimed.orgId, message.attachmentIds || []);
-      if (MEDIA_MESSAGE_TYPES.includes(message.type)) {
+      const templateHeader = message.type === "TEMPLATE" ? message.metadata?.templateHeader : null;
+      if (MEDIA_MESSAGE_TYPES.includes(message.type) || templateHeader?.type) {
         for (const attachment of attachments) {
           try {
             attachment.providerMediaId = await this.media.ensureProviderMediaId({
@@ -90,6 +91,7 @@ export class OutboundWorker {
           }
         }
       }
+      if (templateHeader?.type) attachTemplateHeader(message, attachments[0], templateHeader);
       const result = await this.channelManager.send({ account, message, attachments });
       const decisionAudits = await this.store.find(COLLECTIONS.messageAuditLogs, {
         filters: [["messageId", "==", message.messageId]],
@@ -249,4 +251,32 @@ function safeWarn(logger, fields, message) {
   } catch {
     // Logging must never change delivery or retry behaviour.
   }
+}
+
+function attachTemplateHeader(message, attachment, header) {
+  if (!attachment) {
+    throw permanentError(`The approved ${String(header.type).toLowerCase()} template needs an uploaded header file`, "TEMPLATE_HEADER_MEDIA_REQUIRED");
+  }
+  const type = String(header.type || "").toLowerCase();
+  if (!["image", "video", "document"].includes(type)) {
+    throw permanentError("Unsupported Meta template header media type", "TEMPLATE_HEADER_MEDIA_UNSUPPORTED");
+  }
+  const media = attachment.providerMediaId
+    ? { id: attachment.providerMediaId }
+    : attachment.signedUrl
+      ? { link: attachment.signedUrl }
+      : null;
+  if (!media) throw permanentError("Template header media is unavailable", "TEMPLATE_HEADER_MEDIA_UNAVAILABLE");
+  const template = message.metadata?.template;
+  if (!template) throw permanentError("Template message metadata is unavailable", "TEMPLATE_METADATA_REQUIRED");
+  const components = Array.isArray(template.components)
+    ? template.components.filter((component) => String(component?.type || "").toLowerCase() !== "header")
+    : [];
+  message.metadata = {
+    ...(message.metadata || {}),
+    template: {
+      ...template,
+      components: [{ type: "header", parameters: [{ type, [type]: media }] }, ...components]
+    }
+  };
 }

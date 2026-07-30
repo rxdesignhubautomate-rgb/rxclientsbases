@@ -257,14 +257,11 @@ export class MarketingService {
     this.assertActorRelationship(actor, relationshipType);
     const relationshipTypes = relationshipType === "PROSPECT" ? ["PROSPECT", "LEAD"] : ["EXISTING_CLIENT"];
     const result = await this.store.find(COLLECTIONS.contacts, {
-      filters: [
-        ["orgId", "==", orgId],
-        ["relationshipType", relationshipTypes.length === 1 ? "==" : "in", relationshipTypes.length === 1 ? relationshipTypes[0] : relationshipTypes]
-      ],
-      orderBy: ["createdAt", "asc"],
+      filters: [["orgId", "==", orgId]],
       limit: MAX_SEGMENT_CONTACTS
     });
     const contacts = result.items
+      .filter((contact) => relationshipTypes.includes(contact.relationshipType || "PROSPECT"))
       .filter((contact) => contact.status === "ACTIVE")
       .filter((contact) => !input.onlyOptedIn || contact.marketingConsent?.status === "OPTED_IN" || contact.marketingOptIn === true)
       .sort((left, right) => String(left.contactId || left.id).localeCompare(String(right.contactId || right.id)));
@@ -294,9 +291,12 @@ export class MarketingService {
         createdAt: timestamp,
         updatedAt: timestamp
       };
-      await this.store.create(COLLECTIONS.marketingAudiences, audienceId, batch);
       created.push(batch);
     }
+    await this.store.batchUpdate(COLLECTIONS.marketingAudiences, created.map((batch) => ({
+      id: batch.audienceId,
+      data: batch
+    })));
     await this.audit.write({
       orgId,
       actorId: actor.userId || "SYSTEM",
@@ -312,6 +312,121 @@ export class MarketingService {
       batchSize,
       batchCount: created.length,
       audiences: created
+    };
+  }
+
+  async createDirectExistingCampaigns(orgId, input, actor = {}) {
+    const prepared = this.templates.prepare(input.templateId, {
+      customer_name: "Customer",
+      interest: input.interestLabel,
+      message_line: input.messageLine
+    });
+    const templateHeader = prepared.metadata.templateHeader;
+    if (templateHeader?.required && !input.templateHeaderAttachmentId) {
+      throw new ConflictError(`Upload the ${String(templateHeader.type || "media").toLowerCase()} used by this approved Meta template`);
+    }
+    if (input.templateHeaderAttachmentId) {
+      await this.assertTemplateHeaderAttachment(orgId, input.templateHeaderAttachmentId, templateHeader);
+    }
+    if (this.templateRegistry) await this.templateRegistry.assertApproved(orgId, input.templateId);
+
+    const batches = await this.createSegmentBatches(orgId, {
+      name: input.name,
+      description: input.description || "Direct campaign for opted-in existing clients",
+      relationshipType: "EXISTING_CLIENT",
+      batchSize: input.batchSize || MAX_RECIPIENTS_PER_BATCH,
+      onlyOptedIn: true
+    }, actor);
+    const minimumStart = new Date(Date.now() + 2 * 60 * 1000);
+    const requestedStart = toDate(input.startAt);
+    const baseStart = requestedStart && requestedStart.getTime() > minimumStart.getTime()
+      ? requestedStart
+      : minimumStart;
+    const intervalMinutes = Math.max(Number(input.intervalMinutes) || 10, 5);
+    const campaigns = [];
+    const campaignRecords = [];
+    const timestamp = now();
+
+    for (let index = 0; index < batches.audiences.length; index += 1) {
+      const audience = batches.audiences[index];
+      const campaignId = createId("marketingCampaign");
+      const campaignName = `${input.name} - Batch ${index + 1} of ${batches.batchCount}`;
+      const startAt = new Date(baseStart.getTime() + index * intervalMinutes * 60 * 1000);
+      const campaign = {
+        campaignId,
+        orgId,
+        audienceId: audience.audienceId,
+        audienceName: audience.name,
+        name: campaignName,
+        description: input.description || "",
+        interestLabel: input.interestLabel,
+        templateId: input.templateId,
+        templateHeaderAttachmentId: input.templateHeaderAttachmentId || null,
+        relationshipType: "EXISTING_CLIENT",
+        ownerScope: resolveClientScope(actor),
+        deliveryMode: "AUTO",
+        trigger: "MANUAL",
+        steps: [{
+          stepId: "STEP_1",
+          position: 1,
+          delayDays: 0,
+          delayMinutes: 0,
+          messageLine: input.messageLine,
+          messageType: "TEXT",
+          attachmentIds: []
+        }],
+        templateCategory: "MARKETING",
+        status: "SCHEDULED",
+        lifecycleStatus: "SCHEDULED",
+        startAt,
+        submittedAt: timestamp,
+        submittedBy: actor.userId || "SYSTEM",
+        approvedAt: timestamp,
+        approvedBy: actor.userId || "SYSTEM",
+        approvalMode: "DIRECT_OWNER_ADMIN",
+        scheduledAt: timestamp,
+        scheduledBy: actor.userId || "SYSTEM",
+        createdBy: actor.userId || "SYSTEM",
+        stats: emptyStats(),
+        directSendGroupId: batches.batchGroupId,
+        directExistingClientSend: true,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+      campaignRecords.push({ id: campaignId, data: campaign });
+      campaigns.push({
+        campaignId,
+        name: campaignName,
+        audienceId: audience.audienceId,
+        contactCount: audience.contactCount,
+        status: "SCHEDULED",
+        startAt
+      });
+    }
+    await this.store.batchUpdate(COLLECTIONS.marketingCampaigns, campaignRecords);
+
+    await this.audit.write({
+      orgId,
+      actorId: actor.userId || "SYSTEM",
+      action: "DIRECT_EXISTING_CLIENT_CAMPAIGNS_SCHEDULED",
+      entityType: "MARKETING_CAMPAIGN_GROUP",
+      entityId: batches.batchGroupId,
+      after: {
+        totalContacts: batches.totalContacts,
+        batchCount: batches.batchCount,
+        intervalMinutes,
+        firstStartAt: baseStart
+      }
+    });
+    return {
+      directSendGroupId: batches.batchGroupId,
+      relationshipType: "EXISTING_CLIENT",
+      totalContacts: batches.totalContacts,
+      batchCount: batches.batchCount,
+      batchSize: batches.batchSize,
+      intervalMinutes,
+      firstStartAt: baseStart,
+      campaigns
     };
   }
 
@@ -363,6 +478,18 @@ export class MarketingService {
   async createCampaign(orgId, input, actor = {}) {
     const audience = await this.getAudience(orgId, input.audienceId, { includeContacts: false, actor });
     await this.assertCampaignAttachments(orgId, input.steps);
+    const preparedTemplate = this.templates.prepare(input.templateId, {
+      customer_name: "Customer",
+      interest: input.interestLabel,
+      message_line: input.steps[0].messageLine
+    });
+    const templateHeader = preparedTemplate.metadata.templateHeader;
+    if (input.deliveryMode !== "OPEN_WINDOW_ONLY" && templateHeader?.required && !input.templateHeaderAttachmentId) {
+      throw new ConflictError(`Upload the ${String(templateHeader.type || "media").toLowerCase()} used by this approved Meta template`);
+    }
+    if (input.templateHeaderAttachmentId) {
+      await this.assertTemplateHeaderAttachment(orgId, input.templateHeaderAttachmentId, templateHeader);
+    }
     const campaignId = createId("marketingCampaign");
     const timestamp = now();
     const campaign = {
@@ -373,6 +500,7 @@ export class MarketingService {
       name: input.name,
       interestLabel: input.interestLabel,
       templateId: input.templateId,
+      templateHeaderAttachmentId: input.templateHeaderAttachmentId || null,
       relationshipType: audience.relationshipType || "MIXED",
       ownerScope: resolveClientScope(actor),
       deliveryMode: input.deliveryMode || "AUTO",
@@ -397,7 +525,6 @@ export class MarketingService {
       createdAt: timestamp,
       updatedAt: timestamp
     };
-    this.templates.prepare(campaign.templateId, { customer_name: "Customer", interest: campaign.interestLabel, message_line: campaign.steps[0].messageLine });
     await this.store.create(COLLECTIONS.marketingCampaigns, campaignId, campaign);
     await this.audit.write({ orgId, actorId: actor.userId || "SYSTEM", action: "MARKETING_CAMPAIGN_CREATED", entityType: "MARKETING_CAMPAIGN", entityId: campaignId, after: { name: campaign.name, audienceId: campaign.audienceId, steps: campaign.steps.length } });
     return campaign;
@@ -681,6 +808,7 @@ export class MarketingService {
           textMessage: step.messageLine,
           messageType: step.messageType || "TEXT",
           attachmentIds: step.attachmentIds || [],
+          templateAttachmentIds: campaign.templateHeaderAttachmentId ? [campaign.templateHeaderAttachmentId] : [],
           templateKey: campaign.templateId,
           templateData: prepared.metadata.templateValues,
           campaignId: campaign.campaignId,
@@ -698,7 +826,9 @@ export class MarketingService {
           conversationId: conversation.conversationId,
           text: campaign.deliveryMode === "OPEN_WINDOW_ONLY" ? step.messageLine : prepared.text,
           type: campaign.deliveryMode === "OPEN_WINDOW_ONLY" ? (step.messageType || "TEXT") : prepared.type,
-          attachmentIds: campaign.deliveryMode === "OPEN_WINDOW_ONLY" ? (step.attachmentIds || []) : [],
+          attachmentIds: campaign.deliveryMode === "OPEN_WINDOW_ONLY"
+            ? (step.attachmentIds || [])
+            : (campaign.templateHeaderAttachmentId ? [campaign.templateHeaderAttachmentId] : []),
           metadata: {
             ...prepared.metadata,
             campaignId: campaign.campaignId,
@@ -977,6 +1107,18 @@ export class MarketingService {
       .map((item) => item.attachmentId || item.id));
     const missing = ids.filter((id) => !valid.has(id));
     if (missing.length) throw new ConflictError("Upload campaign media through the Marketing media picker before saving the drip");
+  }
+
+  async assertTemplateHeaderAttachment(orgId, attachmentId, header = null) {
+    if (!header?.type) throw new ConflictError("The selected Meta template does not accept header media");
+    const attachment = await this.store.get(COLLECTIONS.attachments, attachmentId);
+    if (!attachment || attachment.orgId !== orgId || attachment.purpose !== "MARKETING_ASSET") {
+      throw new ConflictError("Upload the approved template media through the Marketing media picker");
+    }
+    const expectedPrefix = `${String(header.type).toLowerCase()}/`;
+    if (!String(attachment.mimeType || "").toLowerCase().startsWith(expectedPrefix)) {
+      throw new ConflictError(`This Meta template requires a ${String(header.type).toLowerCase()} file`);
+    }
   }
 
   async segmentOwner(orgId, relationshipType) {

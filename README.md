@@ -93,7 +93,7 @@ Use `POST /api/v1/whatsapp/templates/sync` after deployment. The complete enviro
 
 ## Segmented 500-contact campaigns and open-window media
 
-Backend v2.7.0 separates the sales workspace by customer relationship:
+Backend v2.9.0 separates the sales workspace by customer relationship:
 
 - `ankit@rxdesignhub.com` can read and work with `EXISTING_CLIENT` records;
 - `reshu@rxdesignhub.com` can read and work with `PROSPECT` and `LEAD` records;
@@ -102,11 +102,13 @@ Backend v2.7.0 separates the sales workspace by customer relationship:
 
 `POST /api/v1/marketing/audiences/batches` creates deterministic audience documents with at most 500 contacts each. The batch builder reads the selected segment once and writes each audience once, avoiding duplicate Firestore reads and writes at 10,000–20,000-contact scale.
 
+`POST /api/v1/campaigns/direct-existing` is the Owner/Admin one-click path for an existing-client promotion. It never invents consent: only active existing clients with a recorded WhatsApp Marketing opt-in are included. The backend creates 500-contact audience batches, creates and approves one campaign per batch, and schedules the batches at a configurable interval so a 10,000–20,000-contact send is not launched as one synchronous blast.
+
 Campaigns can use `AUTO` delivery or `OPEN_WINDOW_ONLY`. AUTO sends free-form text inside the live customer-service window and falls back to an approved Meta Marketing template outside it. OPEN_WINDOW_ONLY supports text, image, video, audio, and document steps. When the 24-hour window is closed, enrollment waits without sending; the next inbound customer message reopens the window and resumes the drip. Media assets are stored in Firebase Storage with `purpose=MARKETING_ASSET`.
 
 ## Daily WhatsApp workspace
 
-Backend v2.7.0 and frontend v1.7 add segmented campaigns and open-window media drips on top of the cached, incremental shared inbox:
+Backend v2.9.0 and frontend v1.9 add one-click opted-in existing-client scheduling, segmented campaigns, approved video-header Marketing templates and open-window media drips on top of the cached, incremental shared inbox:
 
 - text, images, video, documents, audio/voice notes, locations, contact cards, interactive reply buttons, quoted replies, reactions, and clickable links;
 - delivery/read states, unread counters, incremental polling, desktop alerts, built-in/custom quick replies, and internal notes;

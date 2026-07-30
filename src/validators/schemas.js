@@ -94,6 +94,7 @@ export const marketingCampaignSchema = z.object({
   audienceId: id,
   interestLabel: z.string().trim().min(2).max(160),
   templateId: z.string().trim().min(2).max(80).default("interest_followup"),
+  templateHeaderAttachmentId: id.optional(),
   deliveryMode: z.enum(["AUTO", "OPEN_WINDOW_ONLY"]).optional().default("AUTO"),
   trigger: z.enum(["MANUAL", "CUSTOMER_REPLY"]).optional().default("MANUAL"),
   steps: z.array(z.object({
@@ -121,6 +122,19 @@ export const marketingCampaignSchema = z.object({
     }
   });
 });
+
+export const directExistingCampaignSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  description: z.string().trim().max(1000).optional().default(""),
+  interestLabel: z.string().trim().min(2).max(160),
+  templateId: z.string().trim().min(2).max(80).default("interest_followup"),
+  templateHeaderAttachmentId: id.optional(),
+  batchSize: z.number().int().min(1).max(500).optional().default(500),
+  intervalMinutes: z.number().int().min(5).max(240).optional().default(10),
+  startAt: z.coerce.date().optional(),
+  messageLine: z.string().trim().min(2).max(1024).optional().default("Approved existing-client marketing update"),
+  confirmOptIn: z.literal(true)
+}).strict();
 
 export const marketingLaunchSchema = z.object({
   startAt: z.coerce.date().optional()
