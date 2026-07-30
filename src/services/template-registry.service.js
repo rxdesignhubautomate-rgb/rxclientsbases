@@ -89,7 +89,8 @@ export class TemplateRegistryService {
     }
 
     const syncedAt = now();
-    const items = remoteTemplates.map((template) => ({
+    const items = [...new Map(remoteTemplates.map((template) => {
+      const item = {
       id: templateDocumentId(orgId, template.name, template.language),
       data: {
         templateId: String(template.id || ""),
@@ -104,17 +105,15 @@ export class TemplateRegistryService {
         lastSyncedAt: syncedAt,
         updatedAt: syncedAt
       }
-    }));
+      };
+      return [item.id, item];
+    })).values()];
 
-    const existing = await this.store.find(COLLECTIONS.templateRegistry, {
-      filters: [["orgId", "==", orgId]],
-      limit: 500
-    });
-    const remoteIds = new Set(items.map((item) => item.id));
-    const staleIds = existing.items.filter((item) => !remoteIds.has(item.id)).map((item) => item.id);
-
-    if (items.length) await this.store.batchUpdate(COLLECTIONS.templateRegistry, items);
-    if (staleIds.length) await this.store.batchDelete(COLLECTIONS.templateRegistry, staleIds);
+    try {
+      if (items.length) await this.store.batchUpdate(COLLECTIONS.templateRegistry, items);
+    } catch (error) {
+      throw templateStorageError(error);
+    }
 
     const configured = configuredTemplateStatus(this.templates, remoteTemplates);
     const matched = configured.filter((template) => template.matched);
@@ -122,6 +121,20 @@ export class TemplateRegistryService {
     const languageMismatches = configured.filter((template) => !template.matched && template.availableLanguages.length);
     const missing = configured.filter((template) => !template.matched && !template.availableLanguages.length);
     const warnings = [];
+    let removed = 0;
+
+    try {
+      const existing = await this.store.find(COLLECTIONS.templateRegistry, {
+        filters: [["orgId", "==", orgId]],
+        limit: 500
+      });
+      const remoteIds = new Set(items.map((item) => item.id));
+      const staleIds = existing.items.filter((item) => !remoteIds.has(item.id)).map((item) => item.id);
+      if (staleIds.length) removed = await this.store.batchDelete(COLLECTIONS.templateRegistry, staleIds);
+    } catch (error) {
+      warnings.push(`Templates were saved, but stale registry cleanup was skipped: ${safeOperationalMessage(error)}.`);
+    }
+
     if (!remoteTemplates.length) {
       warnings.push(
         `Meta returned no templates for WABA ending ${maskBusinessAccountId(this.businessAccountId)}. Confirm that this is the WABA where the templates were approved.`
@@ -141,20 +154,24 @@ export class TemplateRegistryService {
     }
 
     if (this.audit) {
-      await this.audit.write({
-        orgId,
-        actorType: actor.userId ? "USER" : "SYSTEM",
-        actorId: actor.userId || "SYSTEM",
-        action: "META_TEMPLATES_SYNCED",
-        entityType: "TEMPLATE_REGISTRY",
-        entityId: orgId,
-        after: {
-          synced: items.length,
-          removed: staleIds.length,
-          configuredMatched: matched.length,
-          configuredApproved: approved.length
-        }
-      });
+      try {
+        await this.audit.write({
+          orgId,
+          actorType: actor.userId ? "USER" : "SYSTEM",
+          actorId: actor.userId || "SYSTEM",
+          action: "META_TEMPLATES_SYNCED",
+          entityType: "TEMPLATE_REGISTRY",
+          entityId: orgId,
+          after: {
+            synced: items.length,
+            removed,
+            configuredMatched: matched.length,
+            configuredApproved: approved.length
+          }
+        });
+      } catch (error) {
+        warnings.push(`Templates were saved, but the sync audit entry could not be written: ${safeOperationalMessage(error)}.`);
+      }
     }
     if (!matched.length) {
       const expected = configured.map((template) => `${template.name} [${template.language}]`).join(", ");
@@ -180,7 +197,7 @@ export class TemplateRegistryService {
     }
     return {
       synced: items.length,
-      removed: staleIds.length,
+      removed,
       matched: matched.length,
       approved: approved.length,
       missing: configured.length - matched.length,
@@ -265,6 +282,29 @@ function templateSyncError(error, businessAccountId) {
     traceId: error?.details?.traceId || null,
     wabaIdEnding: waba
   });
+}
+
+function templateStorageError(error) {
+  const code = String(error?.code || "FIRESTORE_ERROR");
+  const message = safeOperationalMessage(error);
+  let safeMessage;
+  if (code === "7" || /permission[-_ ]denied/i.test(message)) {
+    safeMessage =
+      "Meta templates were fetched, but Firestore denied the registry write. Confirm the Render Firebase service account belongs to this Firebase project and has Firestore access.";
+  } else if (code === "9" || /failed[-_ ]precondition|requires an index/i.test(message)) {
+    safeMessage = `Meta templates were fetched, but Firestore rejected the registry write: ${message}`;
+  } else {
+    safeMessage = `Meta templates were fetched, but the CRM could not save them to Firestore: ${message}`;
+  }
+  return new AppError("TEMPLATE_REGISTRY_SAVE_FAILED", safeMessage, 424, { provider: "FIRESTORE", providerCode: code });
+}
+
+function safeOperationalMessage(error) {
+  return String(error?.message || error?.code || "unknown operational error")
+    .replace(/https?:\/\/\S+/gi, "[link omitted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
 }
 
 function normalize(value) {

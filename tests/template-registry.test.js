@@ -50,6 +50,53 @@ describe("Meta template registry", () => {
     expect(await store.get("templateRegistry", "stale")).toBeNull();
   });
 
+  it("does not block a successful sync when stale cleanup is unavailable", async () => {
+    const store = new MemoryStore();
+    store.find = async () => {
+      throw new Error("cleanup query unavailable");
+    };
+    const service = new TemplateRegistryService({
+      store,
+      businessAccountId: "123456789012345",
+      whatsappAdapter: {
+        listMessageTemplates: async () => [
+          { id: "T1", name: "rx_order_confirmation", language: "en", category: "UTILITY", status: "APPROVED" }
+        ]
+      }
+    });
+
+    const result = await service.syncFromMeta("RXDH");
+
+    expect(result).toMatchObject({ synced: 1, matched: 1, approved: 1, removed: 0 });
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/stale registry cleanup was skipped/i)
+    ]));
+  });
+
+  it("returns an actionable error when Firestore cannot save fetched templates", async () => {
+    const store = new MemoryStore();
+    store.batchUpdate = async () => {
+      const error = new Error("7 PERMISSION_DENIED: missing permission");
+      error.code = 7;
+      throw error;
+    };
+    const service = new TemplateRegistryService({
+      store,
+      businessAccountId: "123456789012345",
+      whatsappAdapter: {
+        listMessageTemplates: async () => [
+          { id: "T1", name: "rx_order_confirmation", language: "en", category: "UTILITY", status: "APPROVED" }
+        ]
+      }
+    });
+
+    await expect(service.syncFromMeta("RXDH")).rejects.toMatchObject({
+      code: "TEMPLATE_REGISTRY_SAVE_FAILED",
+      status: 424,
+      details: { provider: "FIRESTORE", providerCode: "7" }
+    });
+  });
+
   it("reports an actionable error when the Meta token is expired", async () => {
     const service = new TemplateRegistryService({
       store: new MemoryStore(),

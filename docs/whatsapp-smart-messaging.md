@@ -188,7 +188,7 @@ Existing `messages`, `outbox`, `contacts`, `leads`, `marketingCampaigns`, and `c
 
 ### Template-sync diagnostics
 
-Backend v2.5.2 returns an actionable error instead of a generic `Internal server error` when Meta rejects a sync. The message distinguishes:
+Backend v2.5.3 returns an actionable error instead of a generic `Internal server error` when Meta or Firestore rejects a sync. The message distinguishes:
 
 - expired or invalid `META_ACCESS_TOKEN`;
 - missing System User access or `whatsapp_business_management` / `whatsapp_business_messaging`;
