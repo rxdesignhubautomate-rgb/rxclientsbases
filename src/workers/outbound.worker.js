@@ -92,7 +92,32 @@ export class OutboundWorker {
         }
       }
       if (templateHeader?.type) attachTemplateHeader(message, attachments[0], templateHeader);
-      const result = await this.channelManager.send({ account, message, attachments });
+      let result;
+      try {
+        result = await this.channelManager.send({ account, message, attachments });
+      } catch (sendError) {
+        if (!invalidProviderMediaId(sendError) || !attachments.length) throw sendError;
+        safeWarn(this.logger, {
+          code: sendError.code,
+          message: sendError.message,
+          messageId: message.messageId
+        }, "invalid_meta_media_id_reuploading_once");
+        for (const attachment of attachments) {
+          await this.media.invalidateProviderMediaId?.({
+            orgId: claimed.orgId,
+            attachmentId: attachment.attachmentId,
+            providerMediaId: attachment.providerMediaId || null
+          });
+          attachment.providerMediaId = await this.media.ensureProviderMediaId({
+            orgId: claimed.orgId,
+            account,
+            attachment,
+            force: true
+          });
+        }
+        if (templateHeader?.type) attachTemplateHeader(message, attachments[0], templateHeader);
+        result = await this.channelManager.send({ account, message, attachments });
+      }
       const decisionAudits = await this.store.find(COLLECTIONS.messageAuditLogs, {
         filters: [["messageId", "==", message.messageId]],
         limit: 5
@@ -251,6 +276,12 @@ function safeWarn(logger, fields, message) {
   } catch {
     // Logging must never change delivery or retry behaviour.
   }
+}
+
+function invalidProviderMediaId(error) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "");
+  return code === "100" && /(?:not a valid.*media attachment id|(?:video|image|document|audio)\.id)/i.test(message);
 }
 
 function attachTemplateHeader(message, attachment, header) {

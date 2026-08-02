@@ -305,6 +305,8 @@ export class MessageService {
         if (attachment?.orgId === orgId) {
           await this.store.update(COLLECTIONS.attachments, attachmentId, {
             providerMediaId: null,
+            providerMediaPhoneNumberId: null,
+            providerMediaUploadedAt: null,
             updatedAt: timestamp
           });
         }

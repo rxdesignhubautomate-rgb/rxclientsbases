@@ -117,6 +117,39 @@ describe("WhatsApp media recovery", () => {
       filename: "quotation.pdf"
     }));
     expect(refreshed.providerMediaId).toBe("meta-media-2");
+    expect(refreshed.providerMediaPhoneNumberId).toBe("phone-id");
+    expect(refreshed.providerMediaUploadedAt).toBeInstanceOf(Date);
+  });
+
+  it("uploads again instead of reusing a media id from another WhatsApp phone number", async () => {
+    const core = makeCore();
+    const bucket = memoryBucket();
+    const channelManager = {
+      uploadMedia: vi.fn().mockResolvedValue("meta-media-new-phone")
+    };
+    const media = new MediaService({ store: core.store, bucket, channelManager });
+    const attachment = await media.storeBuffer({
+      orgId: "RXDH",
+      contactId: "CNT_TEST",
+      buffer: Buffer.from("video-bytes"),
+      mimeType: "video/mp4",
+      originalFilename: "order.mp4",
+      providerMediaId: "meta-media-old-phone",
+      providerMediaPhoneNumberId: "old-phone-id",
+      providerMediaUploadedAt: new Date()
+    });
+
+    const mediaId = await media.ensureProviderMediaId({
+      orgId: "RXDH",
+      account: { phoneNumberId: "new-phone-id" },
+      attachment
+    });
+    const refreshed = await media.get("RXDH", attachment.attachmentId);
+
+    expect(mediaId).toBe("meta-media-new-phone");
+    expect(channelManager.uploadMedia).toHaveBeenCalledTimes(1);
+    expect(refreshed.providerMediaId).toBe("meta-media-new-phone");
+    expect(refreshed.providerMediaPhoneNumberId).toBe("new-phone-id");
   });
 
   it("repairs a legacy CMYK image before uploading it to Meta", async () => {

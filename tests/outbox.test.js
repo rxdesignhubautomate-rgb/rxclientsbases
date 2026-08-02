@@ -133,6 +133,60 @@ describe("outbox processing", () => {
     ]);
   });
 
+  it("re-uploads once when Meta rejects a cached template video id", async () => {
+    const core = makeCore();
+    const { conversation } = await seedConversation(core);
+    const attachment = {
+      attachmentId: "ATT_STALE_TEMPLATE_VIDEO",
+      orgId: "RXDH",
+      storagePath: "files/ATT_STALE_TEMPLATE_VIDEO.mp4",
+      mimeType: "video/mp4",
+      originalFilename: "order.mp4",
+      providerMediaId: "stale-meta-video"
+    };
+    const queued = await core.messages.queueOutbound({
+      orgId: "RXDH",
+      conversationId: conversation.conversationId,
+      text: "Hello Rahul",
+      type: "TEMPLATE",
+      attachmentIds: [attachment.attachmentId],
+      metadata: {
+        templateHeader: { type: "VIDEO", required: true },
+        template: {
+          name: "rx_order_confirmation",
+          language: { code: "en" },
+          components: [{ type: "body", parameters: [{ type: "text", text: "Rahul" }] }]
+        }
+      }
+    });
+    const media = {
+      prepareForSend: vi.fn().mockResolvedValue([attachment]),
+      ensureProviderMediaId: vi.fn()
+        .mockResolvedValueOnce("stale-meta-video")
+        .mockResolvedValueOnce("fresh-meta-video"),
+      invalidateProviderMediaId: vi.fn().mockResolvedValue(null)
+    };
+    const invalidId = Object.assign(new Error("Param video.id is not a valid whatsapp business account media attachment ID"), {
+      code: "100",
+      retryable: false
+    });
+    const send = vi.fn()
+      .mockRejectedValueOnce(invalidId)
+      .mockResolvedValueOnce({ providerMessageId: "wamid.template-video-retry" });
+
+    await worker(core, send, { media }).processOne(queued.outbox);
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(media.invalidateProviderMediaId).toHaveBeenCalledWith(expect.objectContaining({
+      attachmentId: attachment.attachmentId,
+      providerMediaId: "stale-meta-video"
+    }));
+    expect(media.ensureProviderMediaId).toHaveBeenLastCalledWith(expect.objectContaining({ force: true }));
+    const retriedMessage = send.mock.calls[1][0].message;
+    expect(retriedMessage.metadata.template.components[0].parameters[0].video.id).toBe("fresh-meta-video");
+    expect((await core.messages.get("RXDH", queued.message.messageId)).status).toBe("SENT");
+  });
+
   it("falls back to a signed link when Meta media upload fails", async () => {
     const core = makeCore();
     const { conversation } = await seedConversation(core);

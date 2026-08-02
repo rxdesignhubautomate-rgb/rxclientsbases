@@ -1,9 +1,11 @@
 import { COLLECTIONS } from "../config/constants.js";
 import { createId } from "../utils/ids.js";
 import { sha256 } from "../utils/hashing.js";
-import { now } from "../utils/dates.js";
+import { now, toDate } from "../utils/dates.js";
 import { ConflictError, NotFoundError } from "../utils/errors.js";
 import { normalizeWhatsAppImage } from "./whatsapp-image-normalizer.js";
+
+const META_MEDIA_CACHE_TTL_MS = 28 * 24 * 60 * 60 * 1000;
 
 export class MediaService {
   constructor({
@@ -37,6 +39,8 @@ export class MediaService {
       mimeType: downloaded.mimeType,
       originalFilename: downloaded.filename,
       providerMediaId: downloaded.providerMediaId,
+      providerMediaPhoneNumberId: account.phoneNumberId,
+      providerMediaUploadedAt: now(),
       expectedSha256: media.sha256
     });
   }
@@ -77,6 +81,8 @@ export class MediaService {
       sizeBytes: prepared.buffer.length,
       sha256: actualHash,
       providerMediaId: input.providerMediaId || null,
+      providerMediaPhoneNumberId: input.providerMediaId ? (input.providerMediaPhoneNumberId || null) : null,
+      providerMediaUploadedAt: input.providerMediaId ? (input.providerMediaUploadedAt || now()) : null,
       providerHashMatched: input.expectedSha256 ? input.expectedSha256 === actualHash : null,
       purpose: input.purpose || "CHAT_ATTACHMENT",
       createdBy: input.createdBy || null,
@@ -194,9 +200,9 @@ export class MediaService {
     return { attachment, buffer };
   }
 
-  async ensureProviderMediaId({ orgId, account, attachment }) {
+  async ensureProviderMediaId({ orgId, account, attachment, force = false }) {
     if (attachment.orgId !== orgId) throw new NotFoundError("Attachment");
-    if (attachment.providerMediaId) return attachment.providerMediaId;
+    if (!force && reusableProviderMedia(attachment, account)) return attachment.providerMediaId;
     const file = this.bucket.file(attachment.storagePath);
     let [buffer] = await file.download();
     let mimeType = attachment.mimeType;
@@ -218,6 +224,8 @@ export class MediaService {
         sizeBytes: buffer.length,
         sha256: actualHash,
         providerMediaId: null,
+        providerMediaPhoneNumberId: null,
+        providerMediaUploadedAt: null,
         whatsappMedia: {
           normalized: true,
           ...prepared.metadata,
@@ -234,9 +242,23 @@ export class MediaService {
     });
     await this.store.update(COLLECTIONS.attachments, attachment.attachmentId, {
       providerMediaId: mediaId,
+      providerMediaPhoneNumberId: account.phoneNumberId,
+      providerMediaUploadedAt: now(),
       updatedAt: now()
     });
     return mediaId;
+  }
+
+  async invalidateProviderMediaId({ orgId, attachmentId, providerMediaId = null }) {
+    const attachment = await this.get(orgId, attachmentId);
+    if (providerMediaId && attachment.providerMediaId !== providerMediaId) return attachment;
+    await this.store.update(COLLECTIONS.attachments, attachmentId, {
+      providerMediaId: null,
+      providerMediaPhoneNumberId: null,
+      providerMediaUploadedAt: null,
+      updatedAt: now()
+    });
+    return { ...attachment, providerMediaId: null, providerMediaPhoneNumberId: null, providerMediaUploadedAt: null };
   }
 
   async prepareForSend(orgId, attachmentIds = []) {
@@ -256,4 +278,11 @@ export class MediaService {
 function safeExtension(filename = "") {
   const match = String(filename).toLowerCase().match(/\.[a-z0-9]{1,8}$/);
   return match ? match[0] : "";
+}
+
+function reusableProviderMedia(attachment, account) {
+  if (!attachment.providerMediaId || !account?.phoneNumberId) return false;
+  if (attachment.providerMediaPhoneNumberId !== account.phoneNumberId) return false;
+  const uploadedAt = toDate(attachment.providerMediaUploadedAt);
+  return Boolean(uploadedAt && Date.now() - uploadedAt.getTime() < META_MEDIA_CACHE_TTL_MS);
 }

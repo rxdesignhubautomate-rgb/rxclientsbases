@@ -60,19 +60,19 @@ export function createApp(options = {}) {
     res.json({
       status: "ok",
       service: "rx-communication-crm",
-      version: "2.9.6",
+      version: "2.9.8",
       endpoints: { health: "/health", readiness: "/ready", api: "/api/v1" },
       timestamp: new Date().toISOString()
     });
   });
 
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", service: "rx-communication-crm", version: "2.9.6", timestamp: new Date().toISOString() });
+    res.json({ status: "ok", service: "rx-communication-crm", version: "2.9.8", timestamp: new Date().toISOString() });
   });
   app.get("/ready", async (_req, res) => {
     try {
       await container.store.get("systemSettings", "readiness");
-      res.json({ status: "ready", service: "rx-communication-crm", version: "2.9.6", timestamp: new Date().toISOString() });
+      res.json({ status: "ready", service: "rx-communication-crm", version: "2.9.8", timestamp: new Date().toISOString() });
     } catch {
       res.status(503).json({ status: "not_ready", service: "rx-communication-crm", timestamp: new Date().toISOString() });
     }

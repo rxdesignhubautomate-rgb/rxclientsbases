@@ -22,8 +22,11 @@ function testApp() {
       getMany: vi.fn().mockResolvedValue(orders),
       find: vi.fn().mockImplementation(async (collection) => ({
         items: collection === "contacts"
-          ? [{ contactId: "CON_1001", orgId: "RXDH", relationshipType: "EXISTING_CLIENT", companyName: "Alpha Pharma" }]
-          : [orders[0]],
+          ? [
+              { contactId: "CON_1001", orgId: "RXDH", relationshipType: "EXISTING_CLIENT", companyName: "Alpha Pharma" },
+              { contactId: "CON_PROSPECT", orgId: "RXDH", relationshipType: "PROSPECT", companyName: "Prospect Pharma" }
+            ]
+          : orders,
         pagination: { nextCursor: null, hasMore: false }
       }))
     },

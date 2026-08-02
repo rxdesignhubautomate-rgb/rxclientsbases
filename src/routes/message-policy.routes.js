@@ -93,22 +93,33 @@ export function messagePolicyRoutes(container) {
 
   router.get("/events/order-confirmed/batch/clients", authorizeRole("OWNER", "ADMIN"), wrap(async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 500, 1), 1000);
-    return sendList(res, await container.store.find(COLLECTIONS.contacts, {
-      filters: [["orgId", "==", req.auth.orgId], ["relationshipType", "==", "EXISTING_CLIENT"]],
-      orderBy: ["updatedAt", "desc"],
+    const result = await container.store.find(COLLECTIONS.contacts, {
+      // Keep this endpoint on Firestore's automatic single-field index. The
+      // composite contact index may still be building after a new deployment.
+      filters: [["orgId", "==", req.auth.orgId]],
       cursor: decodeCursor(req.query.cursor),
       limit
-    }));
+    });
+    return sendList(res, {
+      ...result,
+      items: result.items.filter((contact) => contact.relationshipType === "EXISTING_CLIENT")
+    });
   }));
 
   router.get("/events/order-confirmed/batch/orders", authorizeRole("OWNER", "ADMIN"), wrap(async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit) || 500, 1), 1000);
-    return sendList(res, await container.store.find(COLLECTIONS.orders, {
-      filters: [["orgId", "==", req.auth.orgId], ["status", "in", UTILITY_BATCH_ACTIVE_ORDER_STATUSES]],
-      orderBy: ["updatedAt", "desc"],
+    const result = await container.store.find(COLLECTIONS.orders, {
+      // Filtering the page in the API avoids making this screen depend on a
+      // separately deployed Firestore composite index.
+      filters: [["orgId", "==", req.auth.orgId]],
       cursor: decodeCursor(req.query.cursor),
       limit
-    }));
+    });
+    const activeStatuses = new Set(UTILITY_BATCH_ACTIVE_ORDER_STATUSES);
+    return sendList(res, {
+      ...result,
+      items: result.items.filter((order) => activeStatuses.has(String(order.status || "").toUpperCase()))
+    });
   }));
 
   router.post("/events/order-confirmed/batch", authorizeRole("OWNER", "ADMIN"), validate(orderConfirmationBatchSchema), wrap(async (req, res) => {
