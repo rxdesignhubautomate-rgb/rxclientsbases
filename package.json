@@ -1,6 +1,6 @@
 {
   "name": "rx-communication-crm",
-  "version": "2.9.8",
+  "version": "2.11.0",
   "private": true,
   "description": "Channel-independent customer communication and business operations platform for RX Design Hub",
   "type": "module",
@@ -19,6 +19,7 @@
     "migrate:backfill-contacts": "node src/scripts/backfill-contact-ids.js",
     "migrate:backfill-conversations": "node src/scripts/backfill-conversations.js",
     "migrate:backfill-messages": "node src/scripts/backfill-messages.js",
+    "migrate:optin-existing": "node src/scripts/backfill-existing-client-consent.js",
     "migrate:verify": "node src/scripts/verify-migration.js",
     "firestore:indexes:check": "node src/scripts/sync-firestore-indexes.js --dry-run",
     "firestore:indexes:sync": "node src/scripts/sync-firestore-indexes.js",

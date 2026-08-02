@@ -374,6 +374,61 @@ describe("WhatsApp marketing campaigns", () => {
     expect(new Date(result.campaigns[1].startAt).getTime() - new Date(result.campaigns[0].startAt).getTime()).toBe(5 * 60 * 1000);
   });
 
+  it("previews opted-in existing clients and schedules one batch per day", async () => {
+    const core = makeCore();
+    const seeded = await seedConversation(core);
+    const second = await core.contacts.create("RXDH", {
+      contactPerson: "Daily Existing Two",
+      primaryPhone: "9999999996",
+      relationshipType: "EXISTING_CLIENT"
+    });
+    await core.contacts.create("RXDH", {
+      contactPerson: "Daily No Consent",
+      primaryPhone: "9999999995",
+      relationshipType: "EXISTING_CLIENT"
+    });
+    await core.store.update("contacts", seeded.contact.contactId, {
+      relationshipType: "EXISTING_CLIENT"
+    });
+    const marketing = makeMarketing(core);
+    await marketing.recordConsent("RXDH", seeded.contact.contactId, {
+      status: "OPTED_IN",
+      source: "IN_PERSON",
+      note: "Requested daily campaign updates"
+    });
+    await marketing.recordConsent("RXDH", second.contactId, {
+      status: "OPTED_IN",
+      source: "PHONE",
+      note: "Requested daily campaign updates"
+    });
+
+    const preview = await marketing.previewExistingAudience("RXDH", { batchSize: 220 });
+    expect(preview).toMatchObject({
+      addressable: 2,
+      batchSize: 220,
+      daysToComplete: 1,
+      suppressed: { optInNotRecorded: 1 }
+    });
+
+    const result = await marketing.createDirectExistingCampaigns("RXDH", {
+      name: "Daily existing clients",
+      interestLabel: "visual aids",
+      templateId: "LEAD_REENGAGEMENT",
+      batchSize: 1,
+      intervalDays: 1,
+      messageLine: "Approved daily existing-client message",
+      confirmOptIn: true
+    }, { userId: "USR_ADMIN", role: "ADMIN" });
+
+    expect(result).toMatchObject({
+      totalContacts: 2,
+      batchCount: 2,
+      intervalDays: 1,
+      dailyBatches: true
+    });
+    expect(new Date(result.campaigns[1].startAt).getTime() - new Date(result.campaigns[0].startAt).getTime()).toBe(24 * 60 * 60 * 1000);
+  });
+
   it("waits for a new customer reply before sending an open-window video drip", async () => {
     const core = makeCore();
     const seeded = await seedConversation(core);

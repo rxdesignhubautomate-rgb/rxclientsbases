@@ -18,6 +18,9 @@ const OPT_OUT_PHRASES = Object.freeze(["STOP", "UNSUBSCRIBE", "CANCEL", "END", "
 const OPT_IN_PHRASES = new Set(["START", "YES", "INTERESTED", "SEND DETAILS", "SEND SAMPLE", "PRICE BHEJO"]);
 const MAX_AUDIENCE_SIZE = 10000;
 const MAX_RECIPIENTS_PER_BATCH = 500;
+// Daily marketing send: 220 keeps a safety buffer under the 250/day (Tier 0)
+// WhatsApp messaging limit so no message in a batch is rejected for cap overflow.
+const DAILY_MARKETING_BATCH_SIZE = 220;
 const MAX_SEGMENT_CONTACTS = 50000;
 const TEMPERATURE_RANK = Object.freeze({ HOT: 3, WARM: 2, COLD: 1 });
 
@@ -334,7 +337,7 @@ export class MarketingService {
       name: input.name,
       description: input.description || "Direct campaign for opted-in existing clients",
       relationshipType: "EXISTING_CLIENT",
-      batchSize: input.batchSize || MAX_RECIPIENTS_PER_BATCH,
+      batchSize: input.batchSize || DAILY_MARKETING_BATCH_SIZE,
       onlyOptedIn: true
     }, actor);
     const minimumStart = new Date(Date.now() + 2 * 60 * 1000);
@@ -342,7 +345,12 @@ export class MarketingService {
     const baseStart = requestedStart && requestedStart.getTime() > minimumStart.getTime()
       ? requestedStart
       : minimumStart;
+    // intervalDays > 0 spaces each batch one (or more) whole days apart so only
+    // one batch (<=220) sends per 24h and the daily messaging limit is respected.
+    // intervalDays 0 falls back to the legacy minute-level stagger.
+    const intervalDays = Math.max(Number(input.intervalDays) || 0, 0);
     const intervalMinutes = Math.max(Number(input.intervalMinutes) || 10, 5);
+    const spacingMinutes = intervalDays > 0 ? intervalDays * 24 * 60 : intervalMinutes;
     const campaigns = [];
     const campaignRecords = [];
     const timestamp = now();
@@ -351,7 +359,7 @@ export class MarketingService {
       const audience = batches.audiences[index];
       const campaignId = createId("marketingCampaign");
       const campaignName = `${input.name} - Batch ${index + 1} of ${batches.batchCount}`;
-      const startAt = new Date(baseStart.getTime() + index * intervalMinutes * 60 * 1000);
+      const startAt = new Date(baseStart.getTime() + index * spacingMinutes * 60 * 1000);
       const campaign = {
         campaignId,
         orgId,
@@ -414,7 +422,9 @@ export class MarketingService {
       after: {
         totalContacts: batches.totalContacts,
         batchCount: batches.batchCount,
+        intervalDays,
         intervalMinutes,
+        spacingMinutes,
         firstStartAt: baseStart
       }
     });
@@ -424,9 +434,45 @@ export class MarketingService {
       totalContacts: batches.totalContacts,
       batchCount: batches.batchCount,
       batchSize: batches.batchSize,
+      intervalDays,
       intervalMinutes,
+      spacingMinutes,
+      dailyBatches: intervalDays > 0,
       firstStartAt: baseStart,
       campaigns
+    };
+  }
+
+  async previewExistingAudience(orgId, { batchSize } = {}) {
+    const result = await this.store.find(COLLECTIONS.contacts, {
+      filters: [["orgId", "==", orgId]],
+      limit: MAX_SEGMENT_CONTACTS
+    });
+    const contacts = result.items.filter((contact) => contact.relationshipType === "EXISTING_CLIENT");
+    const reasons = contacts.map((contact) => eligibilityReason(contact));
+    const addressable = reasons.filter((reason) => reason === null).length;
+    const resolvedBatchSize = Math.min(
+      Math.max(Number(batchSize) || DAILY_MARKETING_BATCH_SIZE, 1),
+      MAX_RECIPIENTS_PER_BATCH
+    );
+    const dailyBatches = Math.ceil(addressable / resolvedBatchSize);
+    const suppressed = {
+      optedOut: reasons.filter((reason) => reason === "OPTED_OUT").length,
+      noPhone: reasons.filter((reason) => reason === "INVALID_PHONE").length,
+      optInNotRecorded: reasons.filter((reason) => reason === "OPT_IN_NOT_RECORDED").length,
+      inactiveOrOther: reasons.filter((reason) => reason && !["OPTED_OUT", "INVALID_PHONE", "OPT_IN_NOT_RECORDED"].includes(reason)).length
+    };
+    return {
+      totalExistingClients: contacts.length,
+      active: contacts.filter((contact) => contact.status === "ACTIVE").length,
+      addressable,
+      suppressed,
+      batchSize: resolvedBatchSize,
+      dailyBatches,
+      daysToComplete: dailyBatches,
+      note: addressable
+        ? `${addressable} opted-in existing clients can be scheduled across ${dailyBatches} daily batch(es).`
+        : "No existing client is currently eligible. Record explicit WhatsApp marketing opt-in before scheduling."
     };
   }
 

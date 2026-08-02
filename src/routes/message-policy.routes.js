@@ -53,6 +53,9 @@ export function messagePolicyRoutes(container) {
   router.post("/campaigns", validate(marketingCampaignSchema), wrap(async (req, res) => {
     return sendData(res, await container.marketing.createCampaign(req.auth.orgId, req.body, req.auth), 201);
   }));
+  router.get("/campaigns/direct-existing/preview", authorizeRole("OWNER", "ADMIN"), wrap(async (req, res) => {
+    return sendData(res, await container.marketing.previewExistingAudience(req.auth.orgId, { batchSize: req.query.batchSize }));
+  }));
   router.post("/campaigns/direct-existing", authorizeRole("OWNER", "ADMIN"), validate(directExistingCampaignSchema), wrap(async (req, res) => {
     return sendData(res, await container.marketing.createDirectExistingCampaigns(req.auth.orgId, req.body, req.auth), 202);
   }));
