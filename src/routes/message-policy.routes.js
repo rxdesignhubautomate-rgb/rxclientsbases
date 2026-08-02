@@ -2,7 +2,7 @@ import express from "express";
 import { authorizeRole } from "../middleware/authorize.js";
 import { validate } from "../middleware/validate.js";
 import { sendData, sendList } from "../utils/http.js";
-import { listQuery } from "../utils/pagination.js";
+import { decodeCursor, listQuery } from "../utils/pagination.js";
 import { validateTemplateHeaderMedia } from "../services/template-header-media.js";
 import { COLLECTIONS } from "../config/constants.js";
 import { ConflictError } from "../utils/errors.js";
@@ -16,6 +16,13 @@ import {
   orderUpdateEventSchema,
   smartMessageSchema
 } from "../validators/schemas.js";
+
+const UTILITY_BATCH_ACTIVE_ORDER_STATUSES = Object.freeze([
+  "CONFIRMED", "IN_DESIGN", "DESIGN_READY", "IN_PRODUCTION", "READY_TO_DISPATCH", "ON_HOLD",
+  "ORDER_RECEIVED", "IN_PROGRESS", "DESIGNING", "APPROVAL", "APPROVED", "PRINT_BIND", "PRODUCTION",
+  "READY_TO_SHIP", "READY_FOR_DISPATCH", "PAYMENT_PENDING", "PENDING", "PROCESSING", "WORK_STARTED"
+]);
+const TERMINAL_ORDER_STATUSES = new Set(["CANCELLED", "COMPLETED", "DELIVERED", "DISPATCHED"]);
 
 export function messagePolicyRoutes(container) {
   const router = express.Router();
@@ -84,6 +91,26 @@ export function messagePolicyRoutes(container) {
     return sendData(res, { processed: await container.marketing.processDue(container.env.CAMPAIGN_BATCH_SIZE) });
   }));
 
+  router.get("/events/order-confirmed/batch/clients", authorizeRole("OWNER", "ADMIN"), wrap(async (req, res) => {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 500, 1), 1000);
+    return sendList(res, await container.store.find(COLLECTIONS.contacts, {
+      filters: [["orgId", "==", req.auth.orgId], ["relationshipType", "==", "EXISTING_CLIENT"]],
+      orderBy: ["updatedAt", "desc"],
+      cursor: decodeCursor(req.query.cursor),
+      limit
+    }));
+  }));
+
+  router.get("/events/order-confirmed/batch/orders", authorizeRole("OWNER", "ADMIN"), wrap(async (req, res) => {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 500, 1), 1000);
+    return sendList(res, await container.store.find(COLLECTIONS.orders, {
+      filters: [["orgId", "==", req.auth.orgId], ["status", "in", UTILITY_BATCH_ACTIVE_ORDER_STATUSES]],
+      orderBy: ["updatedAt", "desc"],
+      cursor: decodeCursor(req.query.cursor),
+      limit
+    }));
+  }));
+
   router.post("/events/order-confirmed/batch", authorizeRole("OWNER", "ADMIN"), validate(orderConfirmationBatchSchema), wrap(async (req, res) => {
     const template = container.templateRegistry.resolve(req.body.templateKey, "UTILITY");
     await container.templateRegistry.assertApproved(req.auth.orgId, req.body.templateKey);
@@ -109,7 +136,7 @@ export function messagePolicyRoutes(container) {
           const order = orderById.get(orderId);
           if (!order || order.orgId !== req.auth.orgId) return batchResult(orderId, "SKIPPED", "ORDER_NOT_FOUND");
           if (!order.contactId) return batchResult(orderId, "SKIPPED", "ORDER_HAS_NO_LINKED_CLIENT");
-          if (["CANCELLED", "COMPLETED", "DELIVERED", "DISPATCHED"].includes(String(order.status || "").toUpperCase())) {
+          if (TERMINAL_ORDER_STATUSES.has(String(order.status || "").toUpperCase())) {
             return batchResult(orderId, "SKIPPED", `ORDER_STATUS_${String(order.status).toUpperCase()}`);
           }
           const contact = await container.contacts.get(req.auth.orgId, order.contactId);

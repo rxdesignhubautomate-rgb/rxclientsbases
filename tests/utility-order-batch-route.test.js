@@ -19,7 +19,13 @@ function testApp() {
       get: vi.fn().mockResolvedValue({ attachmentId: "ATT_BATCH_VIDEO", orgId: "RXDH", purpose: "UTILITY_TEMPLATE_ASSET", mimeType: "video/mp4" })
     },
     store: {
-      getMany: vi.fn().mockResolvedValue(orders)
+      getMany: vi.fn().mockResolvedValue(orders),
+      find: vi.fn().mockImplementation(async (collection) => ({
+        items: collection === "contacts"
+          ? [{ contactId: "CON_1001", orgId: "RXDH", relationshipType: "EXISTING_CLIENT", companyName: "Alpha Pharma" }]
+          : [orders[0]],
+        pagination: { nextCursor: null, hasMore: false }
+      }))
     },
     contacts: {
       get: vi.fn().mockImplementation(async (_orgId, contactId) => ({
@@ -42,6 +48,26 @@ function testApp() {
 }
 
 describe("verified order Utility batch route", () => {
+  it("lists every existing client independently of order eligibility", async () => {
+    const { app } = testApp();
+    const response = await request(app).get("/events/order-confirmed/batch/clients?limit=1000");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual([
+      expect.objectContaining({ contactId: "CON_1001", relationshipType: "EXISTING_CLIENT" })
+    ]);
+  });
+
+  it("lists active orders used to enable eligible client rows", async () => {
+    const { app } = testApp();
+    const response = await request(app).get("/events/order-confirmed/batch/orders?limit=1000");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual([
+      expect.objectContaining({ orderId: "ORD_1001", contactId: "CON_1001", status: "CONFIRMED" })
+    ]);
+  });
+
   it("queues active existing-client orders and skips terminal orders", async () => {
     const { app, smartSend } = testApp();
     const response = await request(app).post("/events/order-confirmed/batch").send({

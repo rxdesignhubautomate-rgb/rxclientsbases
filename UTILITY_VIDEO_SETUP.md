@@ -22,8 +22,8 @@ Do not add promotional copy, offers, catalogues, cross-sell or upsell content to
 
 After Meta shows the template as **Active / Approved**:
 
-1. Deploy backend `2.9.5` to Render.
-2. Deploy frontend `1.9.4` to Vercel.
+1. Deploy backend `2.9.6` to Render.
+2. Deploy frontend `1.9.6` to Vercel.
 3. In CRM Marketing, click **Sync from Meta**.
 4. Confirm `rx_order_confirmation` appears as Approved and the configured duplicate video template is no longer listed.
 5. For one order, select one existing client, enter that client's real CRM order ID and order value, upload the order-specific video, then choose **Verify order & queue video update**.
