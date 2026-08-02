@@ -185,7 +185,7 @@ export class SmartMessageService {
     const id = input.quotationId || input.orderId;
     if (!id) return false;
     const record = await this.store.get(collection, id);
-    return Boolean(record && record.orgId === orgId && (!record.contactId || record.contactId === contactId));
+    return Boolean(record && record.orgId === orgId && record.contactId === contactId);
   }
 
   marketingFrequency(contact, templateKey, current = new Date()) {

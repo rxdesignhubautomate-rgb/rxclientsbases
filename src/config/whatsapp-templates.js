@@ -5,6 +5,13 @@ const DEFAULT_TEMPLATES = Object.freeze({
     ["customer_name", "order_reference", "order_value"],
     "ORDER_CONFIRMATION"
   ),
+  order_confirmation_video: utility(
+    "rx_order_confirmation_video",
+    "Hello {{1}}, your order {{2}} has been confirmed. Order value: {{3}}. The attached video contains information related to this order. We will share the next update here.",
+    ["customer_name", "order_reference", "order_value"],
+    "ORDER_CONFIRMATION",
+    { type: "VIDEO", required: true }
+  ),
   design_approved: utility(
     "rx_design_approved",
     "Hello {{1}}, the design for order {{2}} has been approved. Production will now proceed as approved.",
@@ -74,8 +81,8 @@ export function getWhatsAppTemplate(templateKey, overrides = {}) {
   return getWhatsAppTemplateRegistry(overrides)[templateKey] || null;
 }
 
-function utility(name, body, variables, eventType = null) {
-  return defineTemplate({ name, body, variables, category: "UTILITY", eventType });
+function utility(name, body, variables, eventType = null, header = null) {
+  return defineTemplate({ name, body, variables, category: "UTILITY", eventType, header });
 }
 
 function marketing(name, body, variables, eventType = null, header = null) {

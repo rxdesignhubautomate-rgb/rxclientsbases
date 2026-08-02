@@ -247,7 +247,8 @@ function publicTemplate(template) {
     category: template.category,
     eventType: template.eventType,
     body: template.body,
-    variables: template.variables
+    variables: template.variables,
+    header: template.header || null
   };
 }
 

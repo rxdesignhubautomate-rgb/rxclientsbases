@@ -3,6 +3,9 @@ import { authorizeRole } from "../middleware/authorize.js";
 import { validate } from "../middleware/validate.js";
 import { sendData, sendList } from "../utils/http.js";
 import { listQuery } from "../utils/pagination.js";
+import { validateTemplateHeaderMedia } from "../services/template-header-media.js";
+import { COLLECTIONS } from "../config/constants.js";
+import { ConflictError } from "../utils/errors.js";
 import {
   campaignScheduleSchema,
   directExistingCampaignSchema,
@@ -102,15 +105,46 @@ export function messagePolicyRoutes(container) {
 }
 
 function eventHandler(container, eventType, templateData) {
-  return wrap(async (req, res) => sendData(res, await container.smartMessages.smartSend(req.auth.orgId, {
-    ...req.body,
-    eventType,
-    requestedByCustomer: true,
-    isPromotional: false,
-    templateKey: eventType,
-    templateData: templateData(req.body),
-    metadata: { ...(req.body.metadata || {}), eventEndpoint: eventType }
-  }, req.auth), 202));
+  return wrap(async (req, res) => {
+    const templateKey = req.body.templateKey || templateKeyForEvent(eventType);
+    const template = container.templateRegistry.resolve(templateKey, "UTILITY");
+    const contactId = req.body.contactId || (req.body.leadId
+      ? (await container.store.get(COLLECTIONS.leads, req.body.leadId))?.contactId
+      : null);
+    if (templateKey === "order_confirmation_video") {
+      const contact = await container.contacts.get(req.auth.orgId, contactId);
+      if (contact.relationshipType !== "EXISTING_CLIENT") {
+        throw new ConflictError("Order-confirmation video Utility updates are available only for existing clients");
+      }
+    }
+    const templateAttachmentIds = await validateTemplateHeaderMedia({
+      media: container.media,
+      orgId: req.auth.orgId,
+      contactId,
+      template,
+      attachmentIds: req.body.templateAttachmentIds
+    });
+    return sendData(res, await container.smartMessages.smartSend(req.auth.orgId, {
+      ...req.body,
+      eventType,
+      requestedByCustomer: true,
+      requestedMode: "UTILITY_TEMPLATE",
+      isPromotional: false,
+      templateKey,
+      templateAttachmentIds,
+      templateData: templateData(req.body),
+      metadata: { ...(req.body.metadata || {}), eventEndpoint: eventType }
+    }, req.auth), 202);
+  });
+}
+
+function templateKeyForEvent(eventType) {
+  return ({
+    ORDER_CONFIRMATION: "order_confirmation",
+    DESIGN_APPROVED: "design_approved",
+    READY_TO_DISPATCH: "ready_to_dispatch",
+    EXPERIENCE_FEEDBACK: "experience_feedback"
+  })[eventType] || null;
 }
 
 function wrap(handler) {

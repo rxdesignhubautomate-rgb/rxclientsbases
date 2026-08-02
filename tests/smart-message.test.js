@@ -91,6 +91,45 @@ describe("audited smart send", () => {
     expect(messages.items[0].metadata.template.language.code).toBe("en_US");
   });
 
+  it("queues the verified order video as the approved Utility template header", async () => {
+    const core = makeCore();
+    const seeded = await seedConversation(core);
+    await core.store.update("conversations", seeded.conversation.conversationId, {
+      lastInboundAt: new Date(Date.now() - 25 * 60 * 60 * 1000)
+    });
+    await core.store.set("orders", "ORD_VIDEO", {
+      orderId: "ORD_VIDEO",
+      orgId: "RXDH",
+      contactId: seeded.contact.contactId,
+      status: "CONFIRMED"
+    });
+    const smart = makeSmart(core);
+
+    const result = await smart.smartSend("RXDH", {
+      contactId: seeded.contact.contactId,
+      conversationId: seeded.conversation.conversationId,
+      eventType: "ORDER_CONFIRMATION",
+      orderId: "ORD_VIDEO",
+      templateKey: "order_confirmation_video",
+      templateAttachmentIds: ["ATT_ORDER_VIDEO"],
+      templateData: {
+        customer_name: "Rahul",
+        order_reference: "ORD_VIDEO",
+        order_value: "INR 1000"
+      }
+    });
+
+    expect(result).toMatchObject({ queued: true, mode: "UTILITY_TEMPLATE" });
+    const messages = await core.store.find("messages", {
+      filters: [["direction", "==", "OUTBOUND"]],
+      limit: 10
+    });
+    expect(messages.items[0]).toMatchObject({
+      attachmentIds: ["ATT_ORDER_VIDEO"],
+      metadata: { templateHeader: { type: "VIDEO", required: true } }
+    });
+  });
+
   it("preserves structured WhatsApp payloads through the policy layer", async () => {
     const core = makeCore();
     const seeded = await seedConversation(core);

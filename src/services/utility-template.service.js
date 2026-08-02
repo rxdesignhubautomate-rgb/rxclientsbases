@@ -3,6 +3,7 @@ import { ConflictError } from "../utils/errors.js";
 
 const LABELS = Object.freeze({
   order_confirmation: "Order confirmed",
+  order_confirmation_video: "Order confirmed with video",
   design_approved: "Design approved",
   ready_to_dispatch: "Ready to dispatch",
   experience_feedback: "Experience feedback"
@@ -25,7 +26,8 @@ export class UtilityTemplateService {
         category: template.category,
         languageCode: template.language,
         eventType: template.eventType || template.key,
-        variables: template.variables
+        variables: template.variables,
+        header: template.header || null
       }));
   }
 

@@ -20,7 +20,7 @@ describe("Meta template registry", () => {
       synced: 2,
       matched: 1,
       approved: 1,
-      missing: 4
+      missing: 5
     });
     await expect(service.assertApproved("RXDH", "order_confirmation")).resolves.toMatchObject({ status: "APPROVED" });
     await expect(service.assertApproved("RXDH", "LEAD_REENGAGEMENT")).rejects.toThrow(/PAUSED/);
@@ -177,7 +177,7 @@ describe("Meta template registry", () => {
 
     const result = await service.syncFromMeta("RXDH");
 
-    expect(result).toMatchObject({ synced: 1, matched: 1, approved: 1, missing: 4 });
+    expect(result).toMatchObject({ synced: 1, matched: 1, approved: 1, missing: 5 });
     expect(result.configured[0]).toMatchObject({
       name: "rx_order_confirmation",
       language: "en",

@@ -6,6 +6,7 @@ import { now } from "../utils/dates.js";
 import { ConflictError } from "../utils/errors.js";
 import { ensureWhatsAppChannelAccount } from "../bootstrap/whatsapp-channel-account.js";
 import { CLIENT_SCOPES, relationshipTypesForScope } from "../utils/client-scope.js";
+import { validateTemplateHeaderMedia } from "../services/template-header-media.js";
 
 export function createControllers(container) {
   const c = container;
@@ -199,8 +200,22 @@ export function createControllers(container) {
         await checkAssigned(req, conversation);
         if (req.body.type === "TEMPLATE") {
           const template = c.templateRegistry.resolve(req.body.utilityTemplateId, "UTILITY");
+          if (template.key === "order_confirmation_video") {
+            const contact = await c.contacts.get(org(req), conversation.contactId);
+            if (contact.relationshipType !== "EXISTING_CLIENT") {
+              throw new ConflictError("Order-confirmation video Utility updates are available only for existing clients");
+            }
+          }
           const values = req.body.templateVariables || {};
           const orderId = await resolveOrderReference(org(req), conversation.contactId, values);
+          const templateAttachmentIds = await validateTemplateHeaderMedia({
+            media: c.media,
+            orgId: org(req),
+            contactId: conversation.contactId,
+            conversationId: conversation.conversationId,
+            template,
+            attachmentIds: req.body.attachmentIds
+          });
           const result = await c.smartMessages.smartSend(org(req), {
             contactId: conversation.contactId,
             conversationId: conversation.conversationId,
@@ -214,6 +229,7 @@ export function createControllers(container) {
             trackingDetails: values.tracking_details || values.tracking_reference,
             templateKey: req.body.utilityTemplateId,
             templateData: values,
+            templateAttachmentIds,
             idempotencyKey: req.headers["idempotency-key"],
             metadata: req.body.metadata
           }, actor(req));
@@ -466,7 +482,7 @@ export function createControllers(container) {
     system: {
       info: wrap(async (req, res) => sendData(res, {
         service: "rx-communication-crm",
-        version: "2.9.2",
+        version: "2.9.3",
         orgId: org(req),
         features: {
           legacyDualWrite: c.env.ENABLE_LEGACY_DUAL_WRITE,
