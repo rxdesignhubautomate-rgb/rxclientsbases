@@ -16,7 +16,8 @@ export async function validateTemplateHeaderMedia({
   contactId,
   conversationId = null,
   template,
-  attachmentIds = []
+  attachmentIds = [],
+  allowSharedUtilityAsset = false
 }) {
   const ids = [...new Set((attachmentIds || []).filter(Boolean))];
   const header = template?.header || null;
@@ -32,10 +33,11 @@ export async function validateTemplateHeaderMedia({
   if (!ids.length) return [];
 
   const attachment = await media.get(orgId, ids[0]);
-  if (attachment.contactId !== contactId) {
+  const sharedUtilityAsset = allowSharedUtilityAsset && attachment.purpose === "UTILITY_TEMPLATE_ASSET";
+  if (!sharedUtilityAsset && attachment.contactId !== contactId) {
     throw new ConflictError("The template header file does not belong to the selected client");
   }
-  if (conversationId && attachment.conversationId && attachment.conversationId !== conversationId) {
+  if (!sharedUtilityAsset && conversationId && attachment.conversationId && attachment.conversationId !== conversationId) {
     throw new ConflictError("The template header file belongs to another conversation");
   }
 

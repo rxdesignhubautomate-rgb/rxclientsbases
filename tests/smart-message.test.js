@@ -110,7 +110,7 @@ describe("audited smart send", () => {
       conversationId: seeded.conversation.conversationId,
       eventType: "ORDER_CONFIRMATION",
       orderId: "ORD_VIDEO",
-      templateKey: "order_confirmation_video",
+      templateKey: "order_confirmation",
       templateAttachmentIds: ["ATT_ORDER_VIDEO"],
       templateData: {
         customer_name: "Rahul",

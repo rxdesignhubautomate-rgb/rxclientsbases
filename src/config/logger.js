@@ -3,7 +3,7 @@ import { env } from "./env.js";
 
 export const logger = pino({
   level: env.LOG_LEVEL,
-  base: { service: "rx-communication-crm", version: "2.9.3" },
+  base: { service: "rx-communication-crm", version: "2.9.5" },
   redact: {
     paths: [
       "req.headers.authorization",

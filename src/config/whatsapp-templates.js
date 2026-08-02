@@ -3,12 +3,6 @@ const DEFAULT_TEMPLATES = Object.freeze({
     "rx_order_confirmation",
     "Hello {{1}}, your order {{2}} has been confirmed. Order value: {{3}}. We will share the next update here.",
     ["customer_name", "order_reference", "order_value"],
-    "ORDER_CONFIRMATION"
-  ),
-  order_confirmation_video: utility(
-    "rx_order_confirmation_video",
-    "Hello {{1}}, your order {{2}} has been confirmed. Order value: {{3}}. The attached video contains information related to this order. We will share the next update here.",
-    ["customer_name", "order_reference", "order_value"],
     "ORDER_CONFIRMATION",
     { type: "VIDEO", required: true }
   ),

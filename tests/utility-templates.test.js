@@ -5,11 +5,10 @@ import { validateTemplateHeaderMedia } from "../src/services/template-header-med
 import { makeCore, seedConversation } from "./helpers/core.js";
 
 describe("WhatsApp utility templates", () => {
-  it("exposes the operational Utility templates, including order video confirmation", () => {
+  it("exposes the four operational Utility templates", () => {
     const ids = new UtilityTemplateService().list().map((template) => template.id);
     expect(ids).toEqual([
       "order_confirmation",
-      "order_confirmation_video",
       "design_approved",
       "ready_to_dispatch",
       "experience_feedback"
@@ -37,8 +36,8 @@ describe("WhatsApp utility templates", () => {
 
   it("prepares the approved order-confirmation video header", () => {
     const service = new UtilityTemplateService();
-    const template = service.list().find((item) => item.id === "order_confirmation_video");
-    const result = service.prepare("order_confirmation_video", {
+    const template = service.list().find((item) => item.id === "order_confirmation");
+    const result = service.prepare("order_confirmation", {
       customer_name: "Rahul",
       order_reference: "ORD-17",
       order_value: "INR 25,000"
@@ -46,7 +45,7 @@ describe("WhatsApp utility templates", () => {
 
     expect(template.header).toEqual({ type: "VIDEO", required: true });
     expect(result.metadata.templateHeader).toEqual({ type: "VIDEO", required: true });
-    expect(result.metadata.template.name).toBe("rx_order_confirmation_video");
+    expect(result.metadata.template.name).toBe("rx_order_confirmation");
   });
 
   it("accepts only the selected client's video for a video-header Utility template", async () => {

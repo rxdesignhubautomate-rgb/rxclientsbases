@@ -228,9 +228,16 @@ export const orderConfirmationEventSchema = z.object({
   ...eventBase,
   orderId: id,
   orderValue: z.union([z.string().trim().min(1).max(100), z.number()]),
-  templateKey: z.enum(["order_confirmation", "order_confirmation_video"]).optional().default("order_confirmation"),
+  templateKey: z.literal("order_confirmation").optional().default("order_confirmation"),
   templateAttachmentIds: z.array(id).max(1).optional().default([])
 }).refine((value) => value.leadId || value.contactId, { message: "leadId or contactId is required" });
+
+export const orderConfirmationBatchSchema = z.object({
+  orderIds: z.array(id).min(1).max(50).transform((items) => [...new Set(items)]),
+  templateKey: z.literal("order_confirmation").optional().default("order_confirmation"),
+  templateAttachmentId: id,
+  confirmTransactionalUse: z.literal(true)
+}).strict();
 
 export const orderUpdateEventSchema = z.object({
   ...eventBase,

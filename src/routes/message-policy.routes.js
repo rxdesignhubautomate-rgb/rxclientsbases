@@ -11,6 +11,7 @@ import {
   directExistingCampaignSchema,
   marketingCampaignSchema,
   marketingLaunchSchema,
+  orderConfirmationBatchSchema,
   orderConfirmationEventSchema,
   orderUpdateEventSchema,
   smartMessageSchema
@@ -83,6 +84,69 @@ export function messagePolicyRoutes(container) {
     return sendData(res, { processed: await container.marketing.processDue(container.env.CAMPAIGN_BATCH_SIZE) });
   }));
 
+  router.post("/events/order-confirmed/batch", authorizeRole("OWNER", "ADMIN"), validate(orderConfirmationBatchSchema), wrap(async (req, res) => {
+    const template = container.templateRegistry.resolve(req.body.templateKey, "UTILITY");
+    await container.templateRegistry.assertApproved(req.auth.orgId, req.body.templateKey);
+    const [templateAttachmentId] = await validateTemplateHeaderMedia({
+      media: container.media,
+      orgId: req.auth.orgId,
+      contactId: null,
+      template,
+      attachmentIds: [req.body.templateAttachmentId],
+      allowSharedUtilityAsset: true
+    });
+    const batchId = `UTILITY_BATCH_${Date.now()}_${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const orders = container.store.getMany
+      ? await container.store.getMany(COLLECTIONS.orders, req.body.orderIds)
+      : await Promise.all(req.body.orderIds.map((orderId) => container.store.get(COLLECTIONS.orders, orderId)));
+    const orderById = new Map(orders.filter(Boolean).map((order) => [order.orderId || order.id, order]));
+    const results = [];
+
+    for (let index = 0; index < req.body.orderIds.length; index += 5) {
+      const chunk = req.body.orderIds.slice(index, index + 5);
+      const chunkResults = await Promise.all(chunk.map(async (orderId) => {
+        try {
+          const order = orderById.get(orderId);
+          if (!order || order.orgId !== req.auth.orgId) return batchResult(orderId, "SKIPPED", "ORDER_NOT_FOUND");
+          if (!order.contactId) return batchResult(orderId, "SKIPPED", "ORDER_HAS_NO_LINKED_CLIENT");
+          if (["CANCELLED", "COMPLETED", "DELIVERED", "DISPATCHED"].includes(String(order.status || "").toUpperCase())) {
+            return batchResult(orderId, "SKIPPED", `ORDER_STATUS_${String(order.status).toUpperCase()}`);
+          }
+          const contact = await container.contacts.get(req.auth.orgId, order.contactId);
+          if (contact.relationshipType !== "EXISTING_CLIENT") return batchResult(orderId, "SKIPPED", "NOT_EXISTING_CLIENT", contact);
+          const sendResult = await container.smartMessages.smartSend(req.auth.orgId, {
+            contactId: contact.contactId,
+            eventType: "ORDER_CONFIRMATION",
+            requestedByCustomer: true,
+            requestedMode: "UTILITY_TEMPLATE",
+            isPromotional: false,
+            orderId,
+            templateKey: req.body.templateKey,
+            templateAttachmentIds: [templateAttachmentId],
+            templateData: {
+              customer_name: contact.contactPerson || contact.companyName || "Customer",
+              order_reference: order.orderNumber || order.externalOrderId || orderId,
+              order_value: formatOrderValue(order)
+            },
+            metadata: { utilityBatchId: batchId, source: "VERIFIED_ORDER_BATCH" }
+          }, req.auth);
+          return batchResult(orderId, sendResult.queued ? "QUEUED" : "SKIPPED", sendResult.reason, contact, sendResult.messageId);
+        } catch (error) {
+          return batchResult(orderId, "FAILED", error.message || "BATCH_SEND_FAILED");
+        }
+      }));
+      results.push(...chunkResults);
+    }
+
+    return sendData(res, {
+      batchId,
+      requested: req.body.orderIds.length,
+      queued: results.filter((item) => item.status === "QUEUED").length,
+      skipped: results.filter((item) => item.status === "SKIPPED").length,
+      failed: results.filter((item) => item.status === "FAILED").length,
+      results
+    }, 202);
+  }));
   router.post("/events/order-confirmed", validate(orderConfirmationEventSchema), eventHandler(container, "ORDER_CONFIRMATION", (body) => ({
     customer_name: body.customerName,
     order_reference: body.orderId,
@@ -111,7 +175,7 @@ function eventHandler(container, eventType, templateData) {
     const contactId = req.body.contactId || (req.body.leadId
       ? (await container.store.get(COLLECTIONS.leads, req.body.leadId))?.contactId
       : null);
-    if (templateKey === "order_confirmation_video") {
+    if (templateKey === "order_confirmation") {
       const contact = await container.contacts.get(req.auth.orgId, contactId);
       if (contact.relationshipType !== "EXISTING_CLIENT") {
         throw new ConflictError("Order-confirmation video Utility updates are available only for existing clients");
@@ -145,6 +209,22 @@ function templateKeyForEvent(eventType) {
     READY_TO_DISPATCH: "ready_to_dispatch",
     EXPERIENCE_FEEDBACK: "experience_feedback"
   })[eventType] || null;
+}
+
+function formatOrderValue(order) {
+  const value = Number(order.totalAmount ?? order.orderAmount ?? order.finalAmount ?? 0);
+  return `${order.currency || "INR"} ${Number.isFinite(value) ? value.toLocaleString("en-IN") : "0"}`;
+}
+
+function batchResult(orderId, status, reason = null, contact = null, messageId = null) {
+  return {
+    orderId,
+    status,
+    reason: reason || null,
+    contactId: contact?.contactId || null,
+    customer: contact?.companyName || contact?.contactPerson || null,
+    messageId: messageId || null
+  };
 }
 
 function wrap(handler) {

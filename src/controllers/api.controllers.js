@@ -200,7 +200,7 @@ export function createControllers(container) {
         await checkAssigned(req, conversation);
         if (req.body.type === "TEMPLATE") {
           const template = c.templateRegistry.resolve(req.body.utilityTemplateId, "UTILITY");
-          if (template.key === "order_confirmation_video") {
+          if (template.key === "order_confirmation") {
             const contact = await c.contacts.get(org(req), conversation.contactId);
             if (contact.relationshipType !== "EXISTING_CLIENT") {
               throw new ConflictError("Order-confirmation video Utility updates are available only for existing clients");
@@ -432,14 +432,14 @@ export function createControllers(container) {
     attachments: {
       get: wrap(async (req, res) => {
         const attachment = await c.media.get(org(req), req.params.attachmentId, { withSignedUrl: true });
-        if (attachment.purpose !== "MARKETING_ASSET") {
+        if (!["MARKETING_ASSET", "UTILITY_TEMPLATE_ASSET"].includes(attachment.purpose)) {
           await checkAssigned(req, await c.contacts.get(org(req), attachment.contactId));
         }
         return sendData(res, attachment);
       }),
       content: wrap(async (req, res) => {
         const { attachment, buffer } = await c.media.getContent(org(req), req.params.attachmentId);
-        if (attachment.purpose !== "MARKETING_ASSET") {
+        if (!["MARKETING_ASSET", "UTILITY_TEMPLATE_ASSET"].includes(attachment.purpose)) {
           await checkAssigned(req, await c.contacts.get(org(req), attachment.contactId));
         }
         const filename = safeDownloadName(attachment.originalFilename || attachment.attachmentId);
@@ -455,8 +455,13 @@ export function createControllers(container) {
       }),
       upload: wrap(async (req, res) => {
         const marketingAsset = req.query.purpose === "MARKETING_ASSET";
-        const contactId = marketingAsset ? `MARKETING_${req.auth.userId}` : req.query.contactId;
-        if (!marketingAsset) {
+        const utilityTemplateAsset = req.query.purpose === "UTILITY_TEMPLATE_ASSET";
+        if (utilityTemplateAsset && !["OWNER", "ADMIN"].includes(req.auth.role)) {
+          throw new ConflictError("Only an owner or admin can upload a shared Utility template asset");
+        }
+        const sharedAsset = marketingAsset || utilityTemplateAsset;
+        const contactId = sharedAsset ? `${utilityTemplateAsset ? "UTILITY" : "MARKETING"}_${req.auth.userId}` : req.query.contactId;
+        if (!sharedAsset) {
           const contact = await c.contacts.get(org(req), contactId);
           await checkAssigned(req, contact);
         }
@@ -469,7 +474,7 @@ export function createControllers(container) {
           mimeType: req.headers["content-type"],
           originalFilename: decodeUploadName(req.headers["x-filename"]),
           normalizeForWhatsApp: true,
-          purpose: marketingAsset ? "MARKETING_ASSET" : "CHAT_ATTACHMENT",
+          purpose: utilityTemplateAsset ? "UTILITY_TEMPLATE_ASSET" : marketingAsset ? "MARKETING_ASSET" : "CHAT_ATTACHMENT",
           createdBy: req.auth.userId
         });
         return sendData(res, attachment, 201);
@@ -482,7 +487,7 @@ export function createControllers(container) {
     system: {
       info: wrap(async (req, res) => sendData(res, {
         service: "rx-communication-crm",
-        version: "2.9.3",
+        version: "2.9.5",
         orgId: org(req),
         features: {
           legacyDualWrite: c.env.ENABLE_LEGACY_DUAL_WRITE,

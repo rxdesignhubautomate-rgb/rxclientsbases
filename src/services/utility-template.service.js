@@ -2,8 +2,7 @@ import { getWhatsAppTemplateRegistry } from "../config/whatsapp-templates.js";
 import { ConflictError } from "../utils/errors.js";
 
 const LABELS = Object.freeze({
-  order_confirmation: "Order confirmed",
-  order_confirmation_video: "Order confirmed with video",
+  order_confirmation: "Order confirmed with video",
   design_approved: "Design approved",
   ready_to_dispatch: "Ready to dispatch",
   experience_feedback: "Experience feedback"
