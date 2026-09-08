@@ -65,12 +65,12 @@ describe("AI modes and safety", () => {
     expect(updatedLead.paymentStatus).toBe("PENDING");
   });
 
-  it("AUTO queues only a safe high-confidence reply", async () => {
+  it("legacy AUTO configuration still creates only a draft in the manual-assist client CRM", async () => {
     const core = makeCore();
     const { conversation } = await seedConversation(core, { aiMode: "AUTO" });
     const result = await service(core, vi.fn().mockResolvedValue(response()), true).processInbound({ orgId: "RXDH", conversationId: conversation.conversationId, message: { messageId: "MSG_1", text: "quotation" } });
-    expect(result.mode).toBe("AUTO_SENT");
-    expect((await core.store.find(COLLECTIONS.outbox, { limit: 10 })).items).toHaveLength(1);
+    expect(result.mode).toBe("DRAFTED");
+    expect((await core.store.find(COLLECTIONS.outbox, { limit: 10 })).items).toHaveLength(0);
   });
 
   it("handles invalid AI JSON safely by rejecting before writes", async () => {

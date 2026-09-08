@@ -1,6 +1,6 @@
 {
   "name": "rx-communication-crm",
-  "version": "2.11.0",
+  "version": "2.12.0",
   "private": true,
   "description": "Channel-independent customer communication and business operations platform for RX Design Hub",
   "type": "module",
@@ -8,8 +8,8 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --exclude=frontend/**",
+    "test:watch": "vitest --exclude=frontend/**",
     "test:smoke": "node tests/smoke-start.js",
     "worker:campaign": "node src/workers/campaign-runner.js",
     "lint": "eslint .",

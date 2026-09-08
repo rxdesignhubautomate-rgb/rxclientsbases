@@ -1,4 +1,5 @@
 import express from "express";
+import { smartInboxRoutes } from "./smart-inbox.routes.js";
 import { createControllers } from "../controllers/api.controllers.js";
 import { contactsRoutes, channelIdentitiesRoutes } from "./contacts.routes.js";
 import { channelAccountsRoutes } from "./channel-accounts.routes.js";
@@ -20,6 +21,7 @@ export function apiRoutes(container, authenticate) {
   const router = express.Router();
   const controller = createControllers(container);
   router.use(authenticate);
+  router.use(smartInboxRoutes(container));
   router.use("/contacts", contactsRoutes(controller.contacts));
   router.use("/channel-identities", channelIdentitiesRoutes(controller.contacts));
   router.use("/channel-accounts", channelAccountsRoutes(controller.channelAccounts));

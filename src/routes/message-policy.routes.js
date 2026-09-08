@@ -1,5 +1,5 @@
 import express from "express";
-import { authorizeRole } from "../middleware/authorize.js";
+import { authorizeRole, authorizePermission } from "../middleware/authorize.js";
 import { validate } from "../middleware/validate.js";
 import { sendData, sendList } from "../utils/http.js";
 import { decodeCursor, listQuery } from "../utils/pagination.js";
@@ -28,15 +28,15 @@ export function messagePolicyRoutes(container) {
   const router = express.Router();
   router.use(authorizeRole("OWNER", "ADMIN", "SALES"));
 
-  router.post("/message/decide", validate(smartMessageSchema), wrap(async (req, res) => {
-    const evaluated = await container.smartMessages.decide(req.auth.orgId, req.body);
+  router.post("/message/decide", authorizePermission("messages.send"), validate(smartMessageSchema), wrap(async (req, res) => {
+    const evaluated = await container.smartMessages.decide(req.auth.orgId, req.body, req.auth);
     return sendData(res, {
       ...evaluated.decision,
       frequency: evaluated.frequency,
       transactionVerified: evaluated.transactionVerified
     });
   }));
-  router.post("/message/smart-send", validate(smartMessageSchema), wrap(async (req, res) => {
+  router.post("/message/smart-send", authorizePermission("messages.send"), validate(smartMessageSchema), wrap(async (req, res) => {
     return sendData(res, await container.smartMessages.smartSend(req.auth.orgId, req.body, req.auth), 202);
   }));
 

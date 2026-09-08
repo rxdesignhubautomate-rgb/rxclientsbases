@@ -70,8 +70,8 @@ describe("WhatsApp message decision policy", () => {
     expect(decideMessageType({ phone: "12345", now: current, lead: {}, eventType: "CUSTOMER_REQUEST" }).reason).toBe("INVALID_PHONE");
   });
 
-  it("uses a recorded free-entry window as Service", () => {
-    expect(decision({ lead: { freeEntryWindowExpiresAt: new Date(current.getTime() + 60 * 60 * 1000) } }).mode).toBe("SERVICE_MESSAGE");
+  it("does not mistake free-entry billing metadata for a service reply window", () => {
+    expect(decision({ lead: { freeEntryWindowExpiresAt: new Date(current.getTime() + 60 * 60 * 1000) } }).mode).toBe("DO_NOT_SEND");
   });
 
   it("uses an approved Utility event outside the service window", () => {

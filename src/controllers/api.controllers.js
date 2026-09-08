@@ -14,7 +14,7 @@ export function createControllers(container) {
   const org = (req) => req.auth.orgId;
   const booleanQuery = (value) => value === "true" ? true : value === "false" ? false : undefined;
   const scopedOptions = (req) => {
-    const options = listQuery(req.query);
+    const options = { ...listQuery(req.query), userId: req.auth.userId };
     if (req.auth.role === "SALES") {
       const relationshipTypes = relationshipTypesForScope(req.auth.clientScope);
       if (relationshipTypes.length) {
@@ -34,7 +34,6 @@ export function createControllers(container) {
       && req.auth.clientScope !== CLIENT_SCOPES.ASSIGNED
       && entity?.contactId
       && !entity.relationshipType
-      && !entity.contactRelationshipType
     ) {
       scopedEntity = await c.contacts.get(org(req), entity.contactId);
     }
@@ -175,7 +174,13 @@ export function createControllers(container) {
         });
         return sendData(res, conversation, 201);
       }),
-      list: wrap(async (req, res) => sendList(res, await c.conversations.list(org(req), scopedOptions(req)))),
+      list: wrap(async (req, res) => {
+        const options = scopedOptions(req);
+        const cutoff = options.to || now();
+        if (!Number.isFinite(cutoff.getTime())) throw new ConflictError('Invalid sync cutoff');
+        req.inboxSyncStartedAt = cutoff.toISOString();
+        return sendList(res, await c.conversations.list(org(req), { ...options, to: cutoff }));
+      }),
       get: wrap(async (req, res) => {
         const value = await c.conversations.get(org(req), req.params.conversationId);
         await checkAssigned(req, value);
@@ -192,7 +197,10 @@ export function createControllers(container) {
         await checkAssigned(req, value);
         return sendData(res, await c.conversations.transition(org(req), req.params.conversationId, action, req.body, actor(req)));
       }),
-      note: wrap(async (req, res) => sendData(res, await c.messages.createInternalNote(org(req), req.params.conversationId, req.body.note, actor(req)), 201))
+      note: wrap(async (req, res) => {
+        await checkAssigned(req, await c.conversations.get(org(req), req.params.conversationId));
+        return sendData(res, await c.messages.createInternalNote(org(req), req.params.conversationId, req.body.note, actor(req)), 201);
+      })
     },
     messages: {
       send: wrap(async (req, res) => {
@@ -280,7 +288,11 @@ export function createControllers(container) {
         await checkAssigned(req, await c.conversations.get(org(req), message.conversationId));
         return sendData(res, await c.media.retryInboundMedia(org(req), req.params.messageId), 200);
       }),
-      markRead: wrap(async (req, res) => sendData(res, await c.messages.markRead(org(req), req.params.messageId, actor(req))))
+      markRead: wrap(async (req, res) => {
+        const message = await c.messages.get(org(req), req.params.messageId);
+        await checkAssigned(req, await c.conversations.get(org(req), message.conversationId));
+        return sendData(res, await c.messages.markRead(org(req), req.params.messageId, actor(req)));
+      })
     },
     whatsapp: {
       utilityTemplates: wrap(async (req, res) => {
@@ -400,8 +412,15 @@ export function createControllers(container) {
     followUps: {
       ...resourceController(c, "followUps", scopedOptions, checkAssigned),
       due: wrap(async (req, res) => sendList(res, await c.domain.list("followUps", org(req), { ...scopedOptions(req), status: "SCHEDULED", to: now() }))),
-      complete: wrap(async (req, res) => sendData(res, await c.domain.update("followUps", org(req), req.params.followUpId, { status: "COMPLETED", completedAt: now(), outcome: req.body.outcome || "" }, actor(req), "COMPLETED"))),
-      reschedule: wrap(async (req, res) => sendData(res, await c.domain.update("followUps", org(req), req.params.followUpId, { status: "SCHEDULED", dueAt: new Date(req.body.dueAt), rescheduleReason: req.body.reason || "" }, actor(req), "RESCHEDULED")))
+      complete: wrap(async (req, res) => {
+        await checkAssigned(req, await c.domain.get("followUps", org(req), req.params.followUpId));
+        return sendData(res, await c.domain.update("followUps", org(req), req.params.followUpId, { status: "COMPLETED", completedAt: now(), outcome: req.body.outcome || "" }, actor(req), "COMPLETED"));
+      }),
+      reschedule: wrap(async (req, res) => {
+        await checkAssigned(req, await c.domain.get("followUps", org(req), req.params.followUpId));
+        if (!Number.isFinite(new Date(req.body.dueAt).getTime()) || new Date(req.body.dueAt).getTime() <= Date.now()) throw new ConflictError("Choose a future follow-up time");
+        return sendData(res, await c.domain.update("followUps", org(req), req.params.followUpId, { status: "SCHEDULED", dueAt: new Date(req.body.dueAt), rescheduleReason: req.body.reason || "" }, actor(req), "RESCHEDULED"));
+      })
     },
     orders: {
       ...resourceController(c, "orders", scopedOptions, checkAssigned),
@@ -487,7 +506,7 @@ export function createControllers(container) {
     system: {
       info: wrap(async (req, res) => sendData(res, {
         service: "rx-communication-crm",
-        version: "2.11.0",
+        version: "2.12.0",
         orgId: org(req),
         features: {
           legacyDualWrite: c.env.ENABLE_LEGACY_DUAL_WRITE,
@@ -503,7 +522,11 @@ export function createControllers(container) {
 function resourceController(container, resource, scopedOptions, checkAssigned) {
   const singular = resource === "followUps" ? "followUpId" : `${resource.slice(0, -1)}Id`;
   return {
-    create: wrap(async (req, res) => sendData(res, await container.domain.create(resource, req.auth.orgId, req.body, req.auth), 201)),
+    create: wrap(async (req, res) => {
+      if (req.body.contactId) await checkAssigned(req, await container.contacts.get(req.auth.orgId, req.body.contactId));
+      if (resource === 'followUps' && (!Number.isFinite(new Date(req.body.dueAt).getTime()) || new Date(req.body.dueAt).getTime() <= Date.now())) throw new ConflictError('Choose a future follow-up time');
+      return sendData(res, await container.domain.create(resource, req.auth.orgId, req.body, req.auth), 201);
+    }),
     list: wrap(async (req, res) => sendList(res, await container.domain.list(resource, req.auth.orgId, scopedOptions(req)))),
     get: wrap(async (req, res) => {
       const value = await container.domain.get(resource, req.auth.orgId, req.params[singular]);
@@ -513,6 +536,7 @@ function resourceController(container, resource, scopedOptions, checkAssigned) {
     update: wrap(async (req, res) => {
       const before = await container.domain.get(resource, req.auth.orgId, req.params[singular]);
       await checkAssigned(req, before);
+      if (req.body.contactId && req.body.contactId !== before.contactId) throw new ConflictError("Changing the linked client is not supported");
       return sendData(res, await container.domain.update(resource, req.auth.orgId, req.params[singular], req.body, req.auth));
     }),
     assign: wrap(async (req, res) => {

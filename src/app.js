@@ -60,19 +60,19 @@ export function createApp(options = {}) {
     res.json({
       status: "ok",
       service: "rx-communication-crm",
-      version: "2.11.0",
+      version: "2.12.0",
       endpoints: { health: "/health", readiness: "/ready", api: "/api/v1" },
       timestamp: new Date().toISOString()
     });
   });
 
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", service: "rx-communication-crm", version: "2.11.0", timestamp: new Date().toISOString() });
+    res.json({ status: "ok", service: "rx-communication-crm", version: "2.12.0", timestamp: new Date().toISOString() });
   });
   app.get("/ready", async (_req, res) => {
     try {
       await container.store.get("systemSettings", "readiness");
-      res.json({ status: "ready", service: "rx-communication-crm", version: "2.11.0", timestamp: new Date().toISOString() });
+      res.json({ status: "ready", service: "rx-communication-crm", version: "2.12.0", timestamp: new Date().toISOString() });
     } catch {
       res.status(503).json({ status: "not_ready", service: "rx-communication-crm", timestamp: new Date().toISOString() });
     }
@@ -87,7 +87,7 @@ export function createApp(options = {}) {
   const authenticate = options.authenticate || createAuthenticate({ auth: container.auth, store: container.store, otpAuth: container.otpAuth });
   app.use("/api/v1", apiRateLimit, apiRoutes(container, authenticate));
 
-  if (options.mountLegacy !== false) {
+  if (options.mountLegacy === true) {
     app.use("/api/devices", requireDashboardKey, requireAdminDevice, devicesRouter);
     app.use("/api/leads", requireDashboardKey, requireApprovedDevice, leadsRouter);
   }
