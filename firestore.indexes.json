@@ -927,11 +927,11 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
-          "fieldPath": "orgId",
+          "fieldPath": "contactId",
           "order": "ASCENDING"
         },
         {
-          "fieldPath": "contactId",
+          "fieldPath": "orgId",
           "order": "ASCENDING"
         },
         {
