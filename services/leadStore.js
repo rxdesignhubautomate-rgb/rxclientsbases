@@ -1,6 +1,8 @@
 import { config } from "../config.js";
 import { FieldValue, getDb } from "../firebase.js";
 import { nowIso } from "../utils/time.js";
+import { recordMessage } from "./chatStore.js";
+import { noteFirestoreAvailable } from "./firestoreQuota.js";
 
 const LEADS = "leads";
 const MESSAGES = "messages";
@@ -34,15 +36,12 @@ export async function getNextRoundRobinAssignee() {
 }
 
 export async function findOrCreateLeadByPhone(phone) {
-  const db = getDb();
-  const ref = db.collection(LEADS).doc(phone);
-  const snap = await ref.get();
-
-  if (snap.exists) {
-    return { id: ref.id, ...snap.data() };
-  }
-
-  const assignedTo = await getNextRoundRobinAssignee();
+  const db=getDb(), ref=db.collection(LEADS).doc(phone), assignment=db.collection(SETTINGS).doc(ASSIGNMENT_DOC);
+  const result=await db.runTransaction(async tx=>{
+    const snap=await tx.get(ref);
+    if(snap.exists) return {id:ref.id,...snap.data()};
+    const rotation=await tx.get(assignment), roster=salesTeam(), counter=Number(rotation.data()?.counter)||0;
+    const assignedTo=roster[counter % roster.length];
   const lead = {
     phone,
     name: null,
@@ -79,9 +78,12 @@ export async function findOrCreateLeadByPhone(phone) {
     lastMessageAt: nowIso()
   };
 
-  await ref.set(lead);
+    tx.set(ref,lead);
+    tx.set(assignment,{counter:counter+1,updatedAt:nowIso()},{merge:true});
+    return {id:ref.id,...lead};
+  });
   invalidateLeadListCache();
-  return { id: ref.id, ...lead };
+  return result;
 }
 
 export async function hasMessage(whatsappMessageId) {
@@ -97,33 +99,12 @@ export async function hasMessage(whatsappMessageId) {
   return !snap.empty;
 }
 
-export async function saveMessage({ leadId, phone, role, text, whatsappMessageId = null }) {
-  const db = getDb();
-  const timestamp = nowIso();
-  const message = {
-    leadId,
-    phone,
-    role,
-    text,
-    whatsappMessageId,
-    timestamp
-  };
-  const leadPatch = {
-    messageCount: FieldValue.increment(1),
-    lastMessageAt: timestamp,
-    updatedAt: timestamp
-  };
-
-  if (role === "user") {
-    leadPatch.lastInboundAt = timestamp;
-  }
-
-  await db.collection(MESSAGES).add(message);
-  await db.collection(LEADS).doc(leadId).set(leadPatch, { merge: true });
+export async function saveMessage(input) {
+  const message = await recordMessage(input);
   invalidateLeadListCache();
-
   return message;
 }
+
 
 export async function getRecentMessages(leadId, limit = 5) {
   const db = getDb();
@@ -159,7 +140,7 @@ export async function getRecentMessages(leadId, limit = 5) {
     .reverse();
 }
 
-export async function updateLeadFromAi(leadId, aiResult, _existingLead = null) {
+export async function updateLeadFromAi(leadId, aiResult, existingLead = null) {
   const db = getDb();
   const fields = aiResult.fields || {};
   const patch = {
@@ -188,6 +169,7 @@ export async function updateLeadFromAi(leadId, aiResult, _existingLead = null) {
 const LEAD_LIST_CACHE_TTL_MS = 20 * 1000;
 let leadListCache = null;
 let leadListCacheAt = 0;
+let leadListRequest = null;
 
 export function invalidateLeadListCache() {
   leadListCache = null;
@@ -196,17 +178,30 @@ export function invalidateLeadListCache() {
 
 async function getAllLeadsCached(queryLimit) {
   const now = Date.now();
-  if (leadListCache && leadListCache.length >= Math.min(queryLimit, leadListCache.queryLimit || 0) && now - leadListCacheAt < LEAD_LIST_CACHE_TTL_MS) {
+  if (leadListCache && leadListCache.queryLimit >= queryLimit && now - leadListCacheAt < LEAD_LIST_CACHE_TTL_MS) {
     return leadListCache;
   }
 
+  if (leadListRequest && leadListRequest.queryLimit >= queryLimit) {
+    return leadListRequest.promise;
+  }
+
   const db = getDb();
-  const snap = await db.collection(LEADS).orderBy("lastMessageAt", "desc").limit(queryLimit).get();
-  const leads = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  leads.queryLimit = queryLimit;
-  leadListCache = leads;
-  leadListCacheAt = now;
-  return leads;
+  const request = (async () => {
+    const snap = await db.collection(LEADS).orderBy("lastMessageAt", "desc").limit(queryLimit).get();
+    const leads = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    leads.queryLimit = queryLimit;
+    leadListCache = leads;
+    leadListCacheAt = Date.now();
+    noteFirestoreAvailable();
+    return leads;
+  })();
+  leadListRequest = { queryLimit, promise: request };
+  try {
+    return await request;
+  } finally {
+    if (leadListRequest?.promise === request) leadListRequest = null;
+  }
 }
 
 export async function listLeads({ temperature, temperatures, assignedTo, status, limit = 50, fields = "" }) {
@@ -225,6 +220,43 @@ export async function listLeads({ temperature, temperatures, assignedTo, status,
 
   const sliced = leads.slice(0, requestedLimit);
   return fields === "list" ? sliced.map(toListLead) : sliced;
+}
+
+export async function listLeadChanges({ since, assignedTo, fields = "", limit = 500 }) {
+  const parsed = Date.parse(String(since || ""));
+  if (!Number.isFinite(parsed)) {
+    throw Object.assign(new Error("A valid lead sync time is required"), { status: 400 });
+  }
+
+  const syncAt = new Date().toISOString();
+  const maximum = Math.min(Math.max(Number(limit) || 500, 1), 500);
+  const snap = await getDb()
+    .collection(LEADS)
+    .where("updatedAt", ">", new Date(parsed).toISOString())
+    .where("updatedAt", "<=", syncAt)
+    .orderBy("updatedAt", "desc")
+    .limit(maximum + 1)
+    .get();
+  noteFirestoreAvailable();
+
+  const resetRequired = snap.docs.length > maximum;
+  if (resetRequired) {
+    return { leads: [], removedIds: [], syncAt, resetRequired: true };
+  }
+
+  const changed = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const matchesScope = (lead) =>
+    !assignedTo ||
+    normalizeAssigneeValue(lead.assignedTo) === normalizeAssigneeValue(assignedTo);
+  const visible = changed.filter(matchesScope);
+  return {
+    leads: fields === "list" ? visible.map(toListLead) : visible,
+    removedIds: assignedTo
+      ? changed.filter((lead) => !matchesScope(lead)).map((lead) => lead.id)
+      : [],
+    syncAt,
+    resetRequired: false,
+  };
 }
 
 function toListLead(lead) {
@@ -281,7 +313,7 @@ export async function updateLead(leadId, patch) {
   // reassign) moves a lead.
   if (["converted", "lost"].includes(update.status)) {
     update.sequenceStatus = "stopped";
-    update.sequenceStopReason = `lead_${update.status}`;
+    update.sequenceStopReason ||= `lead_${update.status}`;
     update.nextSequenceAt = null;
   }
 

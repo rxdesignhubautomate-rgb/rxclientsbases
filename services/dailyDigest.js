@@ -2,6 +2,11 @@ import { config } from "../config.js";
 import { getDb } from "../firebase.js";
 import { listLeads } from "./leadStore.js";
 import { sendWhatsAppText } from "./whatsapp.js";
+import {
+  noteFirestoreAvailable,
+  noteFirestoreQuotaError,
+  quotaStatus,
+} from "./firestoreQuota.js";
 
 const IST_OFFSET_MINUTES = 330;
 const DIGEST_SETTINGS_DOC = "digests";
@@ -17,6 +22,7 @@ function repNames() {
 
 let digestHandle = null;
 let digestRunning = false;
+let digestStateCache = null;
 
 export function startDigestScheduler() {
   if (!config.digestEnabled || digestHandle) return;
@@ -30,6 +36,13 @@ export function startDigestScheduler() {
 
 export async function runDueDigests() {
   if (digestRunning) return { skipped: true, reason: "already_running" };
+  const quota = quotaStatus();
+  if (quota.active)
+    return {
+      skipped: true,
+      reason: "firestore_quota_backoff",
+      retryAt: quota.retryAt,
+    };
   digestRunning = true;
 
   try {
@@ -49,6 +62,9 @@ export async function runDueDigests() {
     }
 
     return { ok: true };
+  } catch (error) {
+    noteFirestoreQuotaError(error);
+    throw error;
   } finally {
     digestRunning = false;
   }
@@ -202,19 +218,19 @@ function normalizeAssignee(value) {
 }
 
 async function getDigestState() {
-  try {
-    const db = getDb();
-    const snap = await db.collection("settings").doc(DIGEST_SETTINGS_DOC).get();
-    return snap.exists ? snap.data() : {};
-  } catch (error) {
-    console.error("digest_state_read_failed", { error: error.message });
-    return {};
-  }
+  if (digestStateCache) return digestStateCache;
+  const db = getDb();
+  const snap = await db.collection("settings").doc(DIGEST_SETTINGS_DOC).get();
+  digestStateCache = snap.exists ? snap.data() : {};
+  noteFirestoreAvailable();
+  return digestStateCache;
 }
 
 async function saveDigestState(patch) {
   const db = getDb();
   await db.collection("settings").doc(DIGEST_SETTINGS_DOC).set(patch, { merge: true });
+  digestStateCache = { ...(digestStateCache || {}), ...patch };
+  noteFirestoreAvailable();
 }
 
 function istNow() {
