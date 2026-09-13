@@ -30,16 +30,29 @@ export class InboundWorker {
     this.loop.stop();
   }
 
+  wake() { this.loop.wake(); }
+
   async tick() {
     if (this.running) return;
     this.running = true;
     try {
+      // The claim supported recovery, but the old polling query never selected
+      // PROCESSING records left behind by a restart.
+      const interrupted = await this.store.find(COLLECTIONS.webhookEvents, {
+        filters: [["orgId", "==", this.webhookService.orgId], ["processingStatus", "==", "PROCESSING"]],
+        orderBy: ["receivedAt", "asc"], limit: this.batchSize
+      });
+      for (const event of interrupted.items) {
+        const locked = toDate(event.lockedAt)?.getTime() || 0;
+        if (locked <= Date.now() - 5 * 60_000) await this.processOne(event);
+      }
       const pending = await this.store.find(COLLECTIONS.webhookEvents, {
         filters: [["orgId", "==", this.webhookService.orgId], ["processingStatus", "in", ["PENDING", "RETRY"]]],
         orderBy: ["receivedAt", "asc"],
         limit: this.batchSize
       });
       for (const event of pending.items) await this.processOne(event);
+      return pending.items.length >= this.batchSize;
     } finally {
       this.running = false;
     }

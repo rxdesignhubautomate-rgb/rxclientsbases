@@ -116,6 +116,7 @@ export class SmartMessageService {
       if (decision.requiresTemplate) await this.recordTemplateQueued(evaluated.context, decision, prepared.metadata?.template, input);
       const audit = await this.writeDecisionAudit(orgId, input, { ...evaluated, decision }, actor, { sent: false, queued: true, messageId });
       await this.saveLastDecision(evaluated.context, decision, audit.messageAuditLogId, messageId);
+      this.messages.notifyQueued?.();
       return {
         success: true,
         sent: false,

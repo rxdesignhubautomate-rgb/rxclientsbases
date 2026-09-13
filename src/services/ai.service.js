@@ -45,8 +45,8 @@ const summarySchema = z.object({
 });
 
 export class AiService {
-  constructor({ apiKey, model, summaryModel, autoSendEnabled, summaryInterval, store, contacts, conversations, messages, smartMessages = null, domain, notifications, client }) {
-    this.client = client || (apiKey ? new OpenAI({ apiKey }) : null);
+  constructor({ apiKey, model, summaryModel, autoSendEnabled: _autoSendEnabled, summaryInterval, store, contacts, conversations, messages, smartMessages = null, domain, notifications, client, requestTimeoutMs = 30_000 }) {
+    this.client = client || (apiKey ? new OpenAI({ apiKey, timeout: requestTimeoutMs, maxRetries: 0 }) : null);
     this.model = model;
     this.summaryModel = summaryModel;
     this.autoSendEnabled = false; // Client CRM: suggestions only; agents explicitly send reviewed drafts.

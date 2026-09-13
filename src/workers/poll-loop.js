@@ -11,6 +11,9 @@ export class PollLoop {
     this.timer = null;
     this.started = false;
     this.failureCount = 0;
+    this.executing = false;
+    this.wakeRequested = false;
+    this.retryAfter = 0;
   }
 
   start() {
@@ -23,6 +26,15 @@ export class PollLoop {
     this.started = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    this.wakeRequested = false;
+  }
+
+  wake() {
+    if (!this.started) return;
+    this.wakeRequested = true;
+    if (this.executing || Date.now() < this.retryAfter) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.schedule(0);
   }
 
   schedule(delayMs) {
@@ -35,17 +47,27 @@ export class PollLoop {
   }
 
   async execute() {
+    if (this.executing || !this.started) return;
+    this.executing = true;
+    this.wakeRequested = false;
     let retryInMs = this.intervalMs;
+    let succeeded = false;
     try {
-      await this.run();
+      const moreWork = await this.run();
+      if (moreWork === true) retryInMs = 250;
       this.failureCount = 0;
+      this.retryAfter = 0;
+      succeeded = true;
     } catch (error) {
       this.failureCount += 1;
       retryInMs = isQuotaExceeded(error)
         ? this.quotaBackoffMs
         : Math.min(this.intervalMs * 2 ** this.failureCount, DEFAULT_MAX_ERROR_BACKOFF_MS);
+      this.retryAfter = Date.now() + retryInMs;
       this.logger.error({ error: error.message, retryInMs }, this.errorMessage);
     } finally {
+      this.executing = false;
+      if (succeeded && this.wakeRequested) retryInMs = Math.min(retryInMs, 250);
       this.schedule(retryInMs);
     }
   }

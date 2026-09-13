@@ -20,6 +20,7 @@ export class MediaService {
     this.channelManager = channelManager;
     this.channelAccounts = channelAccounts;
     this.imageNormalizer = imageNormalizer;
+    this.signedUrls = new Map();
   }
 
   async downloadAndStore({ orgId, account, contactId, conversationId, messageId, media }) {
@@ -187,10 +188,22 @@ export class MediaService {
     const attachment = await this.store.get(COLLECTIONS.attachments, attachmentId);
     if (!attachment || attachment.orgId !== orgId) throw new NotFoundError("Attachment");
     if (!withSignedUrl) return attachment;
-    const [signedUrl] = await this.bucket.file(attachment.storagePath).getSignedUrl({
-      action: "read",
-      expires: Date.now() + 15 * 60 * 1000
-    });
+    // Recheck the attachment and organization on every call; cache only URL signing.
+    const key = JSON.stringify([orgId, attachmentId, attachment.storagePath, toDate(attachment.updatedAt)?.getTime() || 0]);
+    let entry = this.signedUrls.get(key);
+    if (!entry || entry.expiresAt <= Date.now()) {
+      entry = { expiresAt: Date.now() + 60_000 };
+      entry.promise = this.bucket.file(attachment.storagePath).getSignedUrl({
+        action: "read", expires: Date.now() + 15 * 60 * 1000
+      }).then(([url]) => url).catch(error => {
+        if (this.signedUrls.get(key) === entry) this.signedUrls.delete(key);
+        throw error;
+      });
+      this.signedUrls.delete(key);
+      this.signedUrls.set(key, entry);
+      while (this.signedUrls.size > 128) this.signedUrls.delete(this.signedUrls.keys().next().value);
+    }
+    const signedUrl = await entry.promise;
     return { ...attachment, signedUrl };
   }
 

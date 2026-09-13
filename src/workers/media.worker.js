@@ -33,6 +33,7 @@ export class MediaWorker {
         limit: this.batchSize
       });
       for (const job of result.items) await this.processOne(job);
+      return result.items.length >= this.batchSize;
     } finally {
       this.running = false;
     }

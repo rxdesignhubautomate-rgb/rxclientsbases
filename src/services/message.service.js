@@ -81,12 +81,10 @@ export class MessageService {
         throw new ConflictError("The 24-hour WhatsApp reply window is closed. Send an approved Utility template instead.");
       }
     }
-    const account = await this.channelAccounts.resolveForSend(
-      orgId,
-      conversation.currentChannel,
-      conversation.currentChannelAccountId
-    );
-    const identities = await this.contacts.listIdentities(orgId, conversation.contactId);
+    const [account, identities] = await Promise.all([
+      this.channelAccounts.resolveForSend(orgId, conversation.currentChannel, conversation.currentChannelAccountId),
+      this.contacts.listIdentities(orgId, conversation.contactId)
+    ]);
     const identity = identities.items.find(
       (item) => item.channel === conversation.currentChannel && item.active === true
     );
@@ -148,7 +146,7 @@ export class MessageService {
       createdAt: timestamp,
       updatedAt: timestamp
     };
-    return this.store.runTransaction(async (tx) => {
+    const result = await this.store.runTransaction(async (tx) => {
       if (idempotencyKey) {
         const keyId = sha256(`${orgId}:OUTBOUND:${idempotencyKey}`);
         const key = await tx.get(COLLECTIONS.providerMessageKeys, keyId);
@@ -166,6 +164,14 @@ export class MessageService {
       });
       return { duplicate: false, message, outbox };
     });
+    // Smart-message policy/audit bookkeeping must finish before waking delivery.
+    if (!metadata.messageDecisionKey) this.notifyQueued();
+    return result;
+  }
+
+  notifyQueued() {
+    // A wake-up is only an optimization: the committed durable outbox is authoritative.
+    try { this.onQueued?.(); } catch { /* Periodic polling still recovers the job. */ }
   }
 
   async createDraft({ orgId, conversationId, text, metadata = {}, sourceMessageId }) {
@@ -325,28 +331,39 @@ export class MessageService {
       updatedAt: timestamp
     });
     await this.audit.write({ orgId, actorType: "USER", actorId: actor.userId, action: "MESSAGE_RETRIED", entityType: "MESSAGE", entityId: messageId, after: { outboxId } });
+    this.notifyQueued();
     return outbox;
   }
 
   async markRead(orgId, messageId, _actor = {}) {
     const message = await this.get(orgId, messageId);
-    if (message.direction === "INBOUND" && message.providerMessageId && this.channelManager) {
-      const account = await this.channelAccounts.get(orgId, message.channelAccountId);
-      await this.channelManager.markAsRead({ account, providerMessageId: message.providerMessageId });
+    if (message.direction !== "INBOUND") throw new ConflictError("Only incoming messages can be marked read");
+    let receipt = message.providerReadReceipt || { status: "NOT_REQUESTED" };
+    // A receipt rejected by Meta must not leave a viewed CRM conversation unread.
+    if (message.status !== "READ" && message.providerMessageId && this.channelManager) {
+      try {
+        const account = await this.channelAccounts.get(orgId, message.channelAccountId);
+        await this.channelManager.markAsRead({ account, providerMessageId: message.providerMessageId });
+        receipt = { status: "ACCEPTED" };
+      } catch (error) {
+        receipt = { status: "FAILED", code: String(error.code || "READ_RECEIPT_FAILED"), message: String(error.message || error).slice(0, 300) };
+      }
     }
-    await this.store.update(COLLECTIONS.messages, messageId, { status: "READ", updatedAt: now() });
-    if (message.direction === "INBOUND") {
-      await this.store.runTransaction(async tx => {
-        const conversation = await tx.get(COLLECTIONS.conversations, message.conversationId);
-        const readThrough = message.inboundSequence ? Math.max(Number(conversation.lastReadInboundSequence || 0), message.inboundSequence) : Number(conversation.lastReadInboundSequence || 0);
-        const unreadCount = message.inboundSequence
-          ? Math.max(0, Number(conversation.inboundSequence || 0) - readThrough)
-          : (toSafeDate(conversation.lastInboundAt)?.getTime() || 0) <= (toSafeDate(message.createdAt)?.getTime() || 0) ? 0 : Number(conversation.unreadCount || 0);
-        tx.update(COLLECTIONS.conversations,message.conversationId,{unreadCount,lastReadInboundSequence:readThrough,updatedAt:now()});
-      });
-    }
-    const conversation = await this.conversations.get(orgId,message.conversationId);
-    return { ...(await this.get(orgId, messageId)), conversationUnreadCount: conversation.unreadCount };
+    const conversationUnreadCount = await this.store.runTransaction(async tx => {
+      const current = await tx.get(COLLECTIONS.messages, messageId);
+      const conversation = await tx.get(COLLECTIONS.conversations, message.conversationId);
+      if (!current || !conversation || current.orgId !== orgId || conversation.orgId !== orgId) throw new NotFoundError("Conversation");
+      const readThrough = message.inboundSequence ? Math.max(Number(conversation.lastReadInboundSequence || 0), message.inboundSequence) : Number(conversation.lastReadInboundSequence || 0);
+      const unreadCount = message.inboundSequence
+        ? Math.max(0, Number(conversation.inboundSequence || 0) - readThrough)
+        : (toSafeDate(conversation.lastInboundAt)?.getTime() || 0) <= (toSafeDate(message.createdAt)?.getTime() || 0) ? 0 : Number(conversation.unreadCount || 0);
+      if (current.status !== "READ") tx.update(COLLECTIONS.messages, messageId, { status: "READ", providerReadReceipt: receipt, updatedAt: now() });
+      if (conversation.unreadCount !== unreadCount || Number(conversation.lastReadInboundSequence || 0) !== readThrough) {
+        tx.update(COLLECTIONS.conversations, message.conversationId, { unreadCount, lastReadInboundSequence: readThrough, updatedAt: now() });
+      }
+      return unreadCount;
+    });
+    return { ...message, status: "READ", providerReadReceipt: receipt, conversationUnreadCount };
   }
 
   async updateProviderStatus(orgId, providerMessageId, status, error = null, providerTimestamp = null, providerMetadata = null) {

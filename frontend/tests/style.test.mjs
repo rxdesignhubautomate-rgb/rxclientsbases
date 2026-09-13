@@ -66,6 +66,66 @@ function createHarness({ mobile = false } = {}) {
   return { context, calls, wa: context.state.whatsapp };
 }
 
+test('background updates preserve the active editor and selection while messages still refresh', () => {
+  for (const kind of ['textarea', 'input', 'select', 'contenteditable', 'button']) {
+    const { context, wa, calls } = createHarness();
+    wa.selectedId = 'a';
+    const handlers = [];
+    const editor = { value: 'Hello client', selectionStart: 3, selectionEnd: 7,
+      matches: () => true, addEventListener: (event, callback) => handlers.push({event, callback}) };
+    context.document.activeElement = editor;
+    context.document.querySelector = selector => selector === '[data-chat-conversation-id]' ? {dataset:{chatConversationId:'a'}} : null;
+    vm.runInContext('fullPaints=0; messagePaints=0; renderWhatsappPage=()=>fullPaints++; refreshWhatsappMessagesDom=()=>messagePaints++;', context);
+    for(let n=0;n<5;n++) vm.runInContext('renderWhatsappBackground()',context);
+    assert.equal(context.fullPaints,0,kind);
+    assert.equal(context.messagePaints,5,kind);
+    assert.equal(context.document.activeElement,editor);
+    assert.equal(editor.value,'Hello client');
+    assert.equal(editor.selectionStart,3);
+    assert.equal(editor.selectionEnd,7);
+    assert.equal(handlers.length,1,'only one deferred refresh per editing session');
+    assert.equal(calls.length,0,'refresh does not send messages');
+    let deferred;
+    context.setTimeout=callback=>{deferred=callback;};
+    context.document.activeElement=null;
+    handlers[0].callback();
+    assert.equal(context.fullPaints,0,'blur must not replace the clicked send button before click');
+    deferred();
+    assert.equal(context.fullPaints,1);
+    assert.equal(wa.editorRefreshPending,false);
+  }
+});
+
+test('background refresh renders a changed conversation and ignores another route', () => {
+  const {context,wa}=createHarness();
+  wa.selectedId='b';
+  context.document.activeElement={matches:()=>true};
+  context.document.querySelector=()=>({dataset:{chatConversationId:'a'}});
+  vm.runInContext('fullPaints=0; renderWhatsappPage=()=>fullPaints++; renderWhatsappBackground();',context);
+  assert.equal(context.fullPaints,1);
+  context.location.hash='#marketing';
+  vm.runInContext('renderWhatsappBackground()',context);
+  assert.equal(context.fullPaints,1);
+});
+
+test('message-only refresh replaces history without replacing or binding the composer', () => {
+  const {context,wa}=createHarness();
+  wa.messages=[{messageId:'m',text:'New reply'}];wa.selectedId='a';
+  const history={innerHTML:''};
+  const editor={value:'Unfinished draft',selectionStart:4,selectionEnd:4};
+  context.document.activeElement=editor;
+  context.document.querySelector=selector=>selector==='#wa-message-list'?history:null;
+  vm.runInContext(`messageBinds=0; whatsappMessagesMarkup=()=>state.whatsapp.messages.map(m=>m.text).join('');
+    bindWhatsappMessageEvents=()=>messageBinds++; restoreWhatsappViewport=()=>{};
+    installWhatsappMediaScrollStability=()=>{}; refreshWhatsappMessagesDom();`,context);
+  assert.equal(history.innerHTML,'New reply');
+  assert.equal(context.messageBinds,1);
+  assert.equal(context.document.activeElement,editor);
+  assert.equal(editor.value,'Unfinished draft');
+  assert.equal(editor.selectionStart,4);
+  assert.equal(context.page.innerHTML,'');
+});
+
 test('generated inbox escapes client/user/tag content and retains existing CRM controls', () => {
   const { context, wa, calls } = createHarness();
   wa.conversations = structuredClone(conversations);
@@ -294,4 +354,60 @@ test('marketing pagination still drains all saved batches independently of inbox
   vm.runInContext('api=async()=>batchPage()',context);
   const result=await vm.runInContext("loadAllBatchPages('/campaigns?limit=100')",context);
   assert.equal(result.error,null);assert.equal(result.data.length,2);
+});
+
+test('chat messages render without waiting for a slow or failed customer overview', async () => {
+  const {context,wa}=createHarness();
+  wa.selectedId='a';wa.conversations=[{conversationId:'a',contactId:'ca'}];
+  let rejectOverview;
+  context.network=path=>path.includes('/overview')?new Promise((_resolve,reject)=>{rejectOverview=reject;}):Promise.resolve({data:[{messageId:'new',text:'Fast reply',createdAt:'2026-09-14T00:00:00Z'}]});
+  vm.runInContext('api=path=>network(path);renderWhatsappBackground=()=>{};',context);
+  const loaded=await vm.runInContext("loadWhatsappConversation('a')",context);
+  assert.equal(loaded[0].messageId,'new');assert.equal(wa.messages[0].text,'Fast reply');assert.equal(wa.overview,null);
+  rejectOverview(new Error('slow optional overview failed'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(wa.messages[0].text,'Fast reply');
+});
+
+test('overlapping message loads share one request and unchanged overlap does not repaint', async () => {
+  const {context,wa}=createHarness();wa.selectedId='a';wa.messagesConversationId='a';
+  wa.conversations=[{conversationId:'a',contactId:'ca'}];wa.overview={contact:{contactId:'ca'},orders:[]};wa.overviewCachedAt=Date.now();
+  wa.messages=[{messageId:'existing',text:'Same',createdAt:'2026-09-14T00:00:00Z'}];
+  let release,reads=0;context.network=()=>{reads++;return new Promise(resolve=>{release=resolve;});};
+  vm.runInContext('api=()=>network()',context);
+  const first=vm.runInContext("loadWhatsappConversation('a',{incremental:true})",context);
+  const second=vm.runInContext("loadWhatsappConversation('a',{incremental:true})",context);
+  assert.equal(reads,1);release({data:[{...wa.messages[0]}]});
+  const results=await Promise.all([first,second]);assert.equal(results[0].length,0);assert.equal(results[1].length,0);
+});
+
+test('concurrent mark-read refreshes share one request and cannot clear another chat', async () => {
+  const {context,wa}=createHarness();wa.selectedId='a';
+  wa.conversations=[{conversationId:'a',unreadCount:1},{conversationId:'b',unreadCount:2}];
+  wa.messages=[{messageId:'a1',direction:'INBOUND',status:'RECEIVED'}];
+  let release,reads=0;context.network=()=>{reads++;return new Promise(resolve=>{release=resolve;});};
+  vm.runInContext('api=()=>network()',context);
+  const first=vm.runInContext('markSelectedConversationRead()',context);
+  await vm.runInContext('markSelectedConversationRead()',context);assert.equal(reads,1);
+  wa.selectedId='b';wa.messages=[{messageId:'b1',direction:'INBOUND',status:'RECEIVED'}];
+  release({data:{conversationUnreadCount:0}});await first;
+  assert.equal(wa.messages[0].status,'RECEIVED');assert.equal(wa.conversations[1].unreadCount,2);
+});
+
+test('send acknowledgement appears before draft persistence and preserves text typed during send', async () => {
+  const {context,wa}=createHarness();wa.selectedId='a';wa.mode='TEXT';wa.drafts.a='First reply';
+  wa.conversations=[{conversationId:'a',contactId:'ca'}];wa.messages=[];
+  const input={value:'First reply',matches:()=>true};
+  const button={disabled:false,classList:{contains:()=>false}};
+  context.document.querySelector=selector=>selector==='#wa-message-input'?input:null;
+  context.document.body={contains:()=>true};
+  context.input=input;context.button=button;
+  let release;context.network=()=>new Promise(resolve=>{release=resolve;});
+  vm.runInContext("api=()=>network();whatsappWindow=()=>({open:true});notify=()=>{};renderWhatsappBackground=()=>{};refreshWhatsappMessage=async()=>null;saveSmartPreference=()=>new Promise(()=>{});",context);
+  const sending=vm.runInContext('sendWhatsappMessage({preventDefault(){},submitter:button})',context);
+  input.value='My next reply';wa.drafts.a='My next reply';
+  release({data:{queued:true,messageId:'queued-real-id'}});await sending;
+  assert.equal(input.value,'My next reply');assert.equal(wa.drafts.a,'My next reply');
+  assert.equal(wa.messages[0].messageId,'queued-real-id');assert.equal(wa.messages[0].status,'QUEUED');assert.equal(wa.messages[0].text,'First reply');
+  assert.equal(button.disabled,false);
 });

@@ -37,6 +37,8 @@ export class OutboundWorker {
     this.loop.stop();
   }
 
+  wake() { this.loop.wake(); }
+
   async tick() {
     if (this.running) return;
     this.running = true;
@@ -60,6 +62,7 @@ export class OutboundWorker {
         limit: this.batchSize
       });
       for (const record of result.items) await this.processOne(record);
+      return result.items.length >= this.batchSize;
     } finally {
       this.running = false;
     }
