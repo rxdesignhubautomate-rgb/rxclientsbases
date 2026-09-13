@@ -3,7 +3,20 @@ import { config } from "../config.js";
 import { safeJsonParse } from "../utils/json.js";
 import { buildKnowledgePrompt } from "./knowledgeBase.js";
 
-const client = new OpenAI({ apiKey: config.openaiApiKey });
+let client;
+
+function openAiClient() {
+  if (!config.openaiApiKey) {
+    const error = new Error(
+      "AI reply is unavailable because OPENAI_API_KEY is not configured."
+    );
+    error.code = "OPENAI_NOT_CONFIGURED";
+    throw error;
+  }
+
+  if (!client) client = new OpenAI({ apiKey: config.openaiApiKey });
+  return client;
+}
 
 export async function runLeadAgent({ lead, recentMessages, customerMessage }) {
   const completion = await createChatCompletionWithRetry({
@@ -76,7 +89,7 @@ async function createChatCompletionWithRetry(payload) {
 
   for (let attempt = 0; attempt <= delaysMs.length; attempt++) {
     try {
-      return await client.chat.completions.create(payload, {
+      return await openAiClient().chat.completions.create(payload, {
         timeout: 45000,
         maxRetries: 0
       });
