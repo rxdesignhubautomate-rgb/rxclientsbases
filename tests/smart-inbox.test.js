@@ -19,6 +19,16 @@ function worker(core,send=vi.fn().mockResolvedValue({providerMessageId:'provider
 }
 
 describe('smart client inbox',()=>{
+  it('adds marketing reply metadata only from the current organization',async()=>{
+    const core=makeCore(); const {contact}=await seedConversation(core);
+    const repliedAt=new Date('2026-09-01T12:00:00Z');
+    await core.store.set('marketingProspects',contact.contactId,{contactId:contact.contactId,orgId:'RXDH',lastReplyAt:repliedAt});
+    let result=await core.conversations.list('RXDH',{limit:100});
+    expect(result.items[0].lastMarketingReplyAt).toEqual(repliedAt);
+    await core.store.update('marketingProspects',contact.contactId,{orgId:'OTHER'});
+    result=await core.conversations.list('RXDH',{limit:100});
+    expect(result.items[0].lastMarketingReplyAt).toBeNull();
+  });
   it('isolates preferences by authenticated user and blocks out-of-scope access',async()=>{
     const core=makeCore();const {conversation,contact}=await seedConversation(core); const id=conversation.conversationId;
     await core.store.update('contacts',contact.contactId,{relationshipType:'EXISTING_CLIENT',assignedTo:'OTHER'});

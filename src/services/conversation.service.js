@@ -103,22 +103,15 @@ export class ConversationService {
       })
       : result.items;
     const getMany = (collection, ids) => this.store.getMany ? this.store.getMany(collection, ids) : Promise.all(ids.map(id => this.store.get(collection, id)));
-    const [preferences, leads] = await Promise.all([
+    const [preferences, leads, marketingReplies, dueByContact] = await Promise.all([
       options.userId ? getMany(preferenceCollection, scopedItems.map(item => preferenceId(orgId, options.userId, item.conversationId || item.id))) : [],
-      getMany(COLLECTIONS.leads, [...new Set(scopedItems.map(item => item.leadId).filter(Boolean))])
+      getMany(COLLECTIONS.leads, [...new Set(scopedItems.map(item => item.leadId).filter(Boolean))]),
+      getMany(COLLECTIONS.marketingProspects, [...new Set(scopedItems.map(item => item.contactId).filter(Boolean))]),
+      loadDueFollowups(this.store, orgId, [...new Set(scopedItems.map(item=>item.contactId).filter(Boolean))])
     ]);
-    const dueByContact = new Map();
-    const contactIds = [...new Set(scopedItems.map(item => item.contactId).filter(Boolean))];
-    for (let start = 0; start < contactIds.length; start += 30) {
-      let cursor = null;
-      do {
-        const followups = await this.store.find(COLLECTIONS.followUps, { filters: [['orgId','==',orgId],['contactId','in',contactIds.slice(start,start+30)],['status','==','SCHEDULED']], orderBy:['dueAt','asc'], limit:500, cursor });
-        for (const item of followups.items) if (!dueByContact.has(item.contactId)) dueByContact.set(item.contactId,item.dueAt);
-        cursor = followups.pagination?.hasMore ? decodeCursor(followups.pagination.nextCursor) : null;
-      } while(cursor);
-    }
     const preferencesById = new Map(preferences.filter(Boolean).map(item => [item.conversationId, item]));
     const leadsById = new Map(leads.filter(item => item?.orgId === orgId).map(item => [item.leadId || item.id, item]));
+    const repliesByContact = new Map(marketingReplies.filter(item => item?.orgId === orgId).map(item => [item.contactId || item.id, item.lastReplyAt]));
     return {
       ...result,
       items: scopedItems.map((item) => ({
@@ -126,6 +119,7 @@ export class ConversationService {
         nextFollowUpAt: dueByContact.get(item.contactId) || null,
         preferences: preferencesById.get(item.conversationId || item.id) || {},
         lead: leadsById.get(item.leadId) || null,
+        lastMarketingReplyAt: repliesByContact.get(item.contactId) || null,
         contactRelationshipType: contactById.get(item.contactId)?.relationshipType || item.contactRelationshipType || "PROSPECT",
         contact: contactSummary(contactById.get(item.contactId)),
         customerServiceWindow: customerServiceWindow(item.lastInboundAt)
@@ -228,4 +222,22 @@ function toDate(value) {
   if (value._seconds) return new Date(value._seconds * 1000);
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+async function loadDueFollowups(store, orgId, contactIds) {
+  const due = new Map();
+  // At most four independent Firestore queries in flight; each chunk drains its own cursor.
+  for(let start=0;start<contactIds.length;start+=120) {
+    const chunks=[];
+    for(let offset=start;offset<Math.min(start+120,contactIds.length);offset+=30)chunks.push(contactIds.slice(offset,offset+30));
+    await Promise.all(chunks.map(async ids=>{
+      let cursor=null;
+      do {
+        const result=await store.find(COLLECTIONS.followUps,{filters:[['orgId','==',orgId],['contactId','in',ids],['status','==','SCHEDULED']],orderBy:['dueAt','asc'],limit:500,cursor});
+        for(const item of result.items)if(!due.has(item.contactId))due.set(item.contactId,item.dueAt);
+        cursor=result.pagination?.hasMore?decodeCursor(result.pagination.nextCursor):null;
+      }while(cursor);
+    }));
+  }
+  return due;
 }

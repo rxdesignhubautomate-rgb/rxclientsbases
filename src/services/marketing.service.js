@@ -599,6 +599,30 @@ export class MarketingService {
     return { ...campaign, enrollments: sortRecent(enrollments.items.filter((item) => item.orgId === orgId)) };
   }
 
+  async previewCampaign(orgId, campaignId, actor = {}) {
+    const campaign = await this.getCampaign(orgId, campaignId, { actor });
+    if (!this.filterForActor([campaign], actor).length) throw new NotFoundError("Marketing campaign");
+    const audience = await this.getAudience(orgId, campaign.audienceId, { includeContacts: false, actor });
+    // Preparing a preview must not create conversations, enrollments or outbox jobs.
+    const steps = (campaign.steps || []).map(step => {
+      const prepared = this.templates.prepare(campaign.templateId, {
+        customer_name: "Customer", interest: campaign.interestLabel, message_line: step.messageLine
+      });
+      const template = {
+        label: "Template message", text: prepared.text,
+        attachmentIds: campaign.templateHeaderAttachmentId ? [campaign.templateHeaderAttachmentId] : [],
+        mediaRequired: Boolean(prepared.metadata.templateHeader?.required),
+        templateName: prepared.metadata.template.name
+      };
+      const service = { label: "Recent replies (24h)", text: step.messageLine, attachmentIds: step.attachmentIds || [], mediaRequired: false };
+      return {
+        position: step.position, delayMinutes: step.delayMinutes ?? (step.delayDays || 0) * 1440,
+        variants: campaign.deliveryMode === "OPEN_WINDOW_ONLY" ? [service] : this.smartMessages ? [template, service] : [template]
+      };
+    });
+    return { campaign, contactCount: audience.contactCount ?? audience.contactIds?.length ?? 0, steps, sampleName: "Customer" };
+  }
+
   async submitCampaign(orgId, campaignId, actor = {}) {
     const campaign = await this.getCampaign(orgId, campaignId, { actor });
     if (campaign.status !== "DRAFT") throw new ConflictError("Only a draft campaign can be submitted");

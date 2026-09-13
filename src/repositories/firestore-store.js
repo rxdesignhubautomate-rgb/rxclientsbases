@@ -36,7 +36,7 @@ export class FirestoreStore {
     return { id, ...data };
   }
 
-  async find(collection, { filters = [], orderBy, limit = 25, cursor, search, searchFields = [] } = {}) {
+  async find(collection, { filters = [], orderBy, limit = 25, cursor, search, searchFields = [], select } = {}) {
     let query = this.db.collection(collection);
     for (const [field, operator, value] of filters) query = query.where(field, operator, value);
     if (orderBy?.[0]) query = query.orderBy(orderBy[0], orderBy[1] || "desc");
@@ -45,6 +45,7 @@ export class FirestoreStore {
       if (cursorDoc.exists) query = query.startAfter(cursorDoc);
     }
     const fetchLimit = search ? Math.min(limit * 5 + 1, 500) : limit + 1;
+    if (select?.length) query = query.select(...select);
     const snap = await query.limit(fetchLimit).get();
     let items = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     if (search) {
