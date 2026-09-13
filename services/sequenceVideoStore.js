@@ -19,14 +19,12 @@ export async function getVisualAidSequenceConfig(fallbackVideos = []) {
   const defaultCaptions = defaultVisualAidVideoCaptions();
 
   return {
-    videos: [1, 2, 3, 4].map((slot, index) =>
-      String(visualAid[`video${slot}`] || fallbackVideos[index] || "").trim(),
-    ),
-    captions: [1, 2, 3, 4].map((slot, index) =>
-      String(
-        visualAid[`caption${slot}`] || defaultCaptions[index] || "",
-      ).trim(),
-    ),
+    videos: [1, 2, 3, 4]
+      .map((slot, index) => String(visualAid[`video${slot}`] || fallbackVideos[index] || "").trim())
+      .filter(Boolean),
+    captions: [1, 2, 3, 4].map((slot, index) => (
+      String(visualAid[`caption${slot}`] || defaultCaptions[index] || "").trim()
+    ))
   };
 }
 
@@ -47,8 +45,8 @@ export async function getSequenceVideoSettings() {
       caption2: String(visualAid.caption2 || defaults[1] || "").trim(),
       caption3: String(visualAid.caption3 || defaults[2] || "").trim(),
       caption4: String(visualAid.caption4 || defaults[3] || "").trim(),
-      updatedAt: visualAid.updatedAt || null,
-    },
+      updatedAt: visualAid.updatedAt || null
+    }
   };
 }
 
@@ -59,23 +57,20 @@ export async function saveVisualAidSequenceVideo(slot, mediaId) {
   }
 
   const cleanMediaId = String(mediaId || "").trim();
-  if (!/^\d+$/.test(cleanMediaId)) {
-    throw new Error("The upload must return a numeric WhatsApp media ID");
+  if (!cleanMediaId) {
+    throw new Error("Media id is required");
   }
 
   const db = getDb();
-  await db
-    .collection(SETTINGS)
-    .doc(SEQUENCE_VIDEOS_DOC)
-    .set(
-      {
-        [VISUAL_AID_KEY]: {
-          [`video${videoSlot}`]: cleanMediaId,
-          updatedAt: nowIso(),
-        },
-      },
-      { merge: true },
-    );
+  await db.collection(SETTINGS).doc(SEQUENCE_VIDEOS_DOC).set(
+    {
+      [VISUAL_AID_KEY]: {
+        [`video${videoSlot}`]: cleanMediaId,
+        updatedAt: nowIso()
+      }
+    },
+    { merge: true }
+  );
 
   return getSequenceVideoSettings();
 }
@@ -83,26 +78,20 @@ export async function saveVisualAidSequenceVideo(slot, mediaId) {
 export async function saveVisualAidSequenceCaptions(captions = {}) {
   const patch = {};
   for (const slot of [1, 2, 3, 4]) {
-    const value =
-      captions[`caption${slot}`] ?? captions[`video${slot}Caption`] ?? "";
-    patch[`caption${slot}`] = String(value || "")
-      .trim()
-      .slice(0, 900);
+    const value = captions[`caption${slot}`] ?? captions[`video${slot}Caption`] ?? "";
+    patch[`caption${slot}`] = String(value || "").trim().slice(0, 900);
   }
 
   const db = getDb();
-  await db
-    .collection(SETTINGS)
-    .doc(SEQUENCE_VIDEOS_DOC)
-    .set(
-      {
-        [VISUAL_AID_KEY]: {
-          ...patch,
-          updatedAt: nowIso(),
-        },
-      },
-      { merge: true },
-    );
+  await db.collection(SETTINGS).doc(SEQUENCE_VIDEOS_DOC).set(
+    {
+      [VISUAL_AID_KEY]: {
+        ...patch,
+        updatedAt: nowIso()
+      }
+    },
+    { merge: true }
+  );
 
   return getSequenceVideoSettings();
 }

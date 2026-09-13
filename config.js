@@ -12,18 +12,12 @@ export const config = {
   salesTeam: SALES_TEAM,
   openaiApiKey: process.env.OPENAI_API_KEY,
   openaiModel: process.env.OPENAI_MODEL || "gpt-4o-mini",
-  whatsappToken: process.env.WHATSAPP_TOKEN,
-  whatsappGraphVersion: process.env.WHATSAPP_GRAPH_VERSION || 'v23.0',
-  whatsappBusinessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '',
-  whatsappCatalogId: process.env.WHATSAPP_CATALOG_ID || '',
-  whatsappPhoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
-  whatsappVerifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
+  whatsappToken: process.env.META_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN,
+  whatsappPhoneNumberId: process.env.META_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID,
+  whatsappVerifyToken: process.env.META_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN,
   firebaseProjectId: process.env.FIREBASE_PROJECT_ID,
   firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL,
   firebasePrivateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-  googleDriveQuotationsFolderId:
-    process.env.GOOGLE_DRIVE_QUOTATIONS_FOLDER_ID ||
-    "1He-4AeMT7HgelGCGRZ_PdDhSv9cLdn97",
   businessName: process.env.BUSINESS_NAME || "RX Design Hub",
   businessHours: process.env.BUSINESS_HOURS || "10 AM to 7 PM",
   businessLocation: process.env.BUSINESS_LOCATION || "Lucknow, India",
@@ -32,12 +26,22 @@ export const config = {
   deviceApprovalEnabled: process.env.DEVICE_APPROVAL_ENABLED === "true",
   sequenceSchedulerEnabled: process.env.SEQUENCE_SCHEDULER_ENABLED !== "false",
   sequenceCheckIntervalMs: Math.max(Number(process.env.SEQUENCE_CHECK_INTERVAL_MS || 60000), 15000),
-  visualAidSequenceVideos: [1, 2, 3, 4].map((slot, index) => String(process.env[`VISUAL_AID_VIDEO_${slot}`] || (process.env.VISUAL_AID_SEQUENCE_VIDEOS || '').split(',')[index] || '').trim()),
+  visualAidSequenceVideos: [
+    process.env.VISUAL_AID_VIDEO_1,
+    process.env.VISUAL_AID_VIDEO_2,
+    process.env.VISUAL_AID_VIDEO_3,
+    process.env.VISUAL_AID_VIDEO_4,
+    ...(process.env.VISUAL_AID_SEQUENCE_VIDEOS || "").split(",")
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean),
   humanTakeoverCoolingHours: Math.max(Number(process.env.HUMAN_TAKEOVER_COOLING_HOURS || 24), 1),
   salesAlertsEnabled: process.env.SALES_ALERTS_ENABLED !== "false",
   hotAlertCooldownMinutes: Math.max(Number(process.env.HOT_ALERT_COOLDOWN_MINUTES || 360), 30),
   alertNumbers: {
     ankit: cleanAlertPhone(process.env.ALERT_NUMBER_ANKIT),
+    pinky: cleanAlertPhone(process.env.ALERT_NUMBER_PINKY || process.env.ALERT_NUMBER_RESHU),
+    priya: cleanAlertPhone(process.env.ALERT_NUMBER_PRIYA || process.env.ALERT_NUMBER_SHUBHAM),
     reshu: cleanAlertPhone(process.env.ALERT_NUMBER_RESHU),
     shubham: cleanAlertPhone(process.env.ALERT_NUMBER_SHUBHAM),
     admin: cleanAlertPhone(process.env.ALERT_NUMBER_ADMIN)
