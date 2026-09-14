@@ -4,6 +4,7 @@ import { normalizePhone } from "../utils/phone.js";
 import { sha256 } from "../utils/hashing.js";
 import { now } from "../utils/dates.js";
 import { ConflictError, NotFoundError } from "../utils/errors.js";
+import { classificationProjection } from "./client-classification.js";
 
 export class ContactService {
   constructor({ store, audit, notifications }) {
@@ -41,6 +42,7 @@ export class ContactService {
       updatedAt: timestamp,
       lastInteractionAt: timestamp
     };
+    if (this.classificationEnabled) Object.assign(contact, classificationProjection({ ...contact, relationshipType: input.relationshipType || null }));
     await this.store.runTransaction(async (tx) => {
       for (const phone of phones) {
         const keyId = sha256(`${orgId}:PHONE:${phone}`);
@@ -117,6 +119,8 @@ export class ContactService {
     return {
       contact,
       summary: {
+        partial: Boolean(orders.pagination.hasMore || payments.pagination.hasMore),
+        metricNote: 'Legacy overview totals cover loaded records and may include mixed statuses/currencies; use source history for reconciliation.',
         totalOrders: orderItems.length,
         totalValue,
         paidAmount,
@@ -137,21 +141,35 @@ export class ContactService {
   async update(orgId, contactId, input, actor = {}) {
     const before = await this.get(orgId, contactId);
     const patch = { ...input, updatedAt: now() };
+    const withProjection = current => {
+      if (!this.classificationEnabled && !current.crmV1Version) return patch;
+      const classification = classificationProjection({ ...current, ...patch });
+      if (input.relationshipType === "EXISTING_CLIENT") classification.crmV1Relationship = "customer";
+      return { ...patch, ...classification, crmV1Revision: (current.crmV1Revision || 0) + 1 };
+    };
     if (input.primaryPhone !== undefined || input.phones !== undefined) {
       const phones = normalizePhones(input.primaryPhone ?? before.primaryPhone, input.phones ?? before.phones);
       patch.primaryPhone = phones[0] || null;
       patch.phones = phones;
       await this.store.runTransaction(async (tx) => {
+        const current = await tx.get(COLLECTIONS.contacts, contactId);
+        if (!current || current.orgId !== orgId) throw new NotFoundError("Contact");
+        const keys = [];
         for (const phone of phones) {
           const keyId = sha256(`${orgId}:PHONE:${phone}`);
           const key = await tx.get(COLLECTIONS.contactPhoneKeys, keyId);
           if (key && key.contactId !== contactId) throw new ConflictError(`Phone ${phone} belongs to another contact`);
-          tx.set(COLLECTIONS.contactPhoneKeys, keyId, { orgId, phone, contactId, updatedAt: now() }, { merge: true });
+          keys.push({ keyId, phone });
         }
-        tx.update(COLLECTIONS.contacts, contactId, patch);
+        for (const { keyId, phone } of keys) tx.set(COLLECTIONS.contactPhoneKeys, keyId, { orgId, phone, contactId, updatedAt: now() }, { merge: true });
+        tx.update(COLLECTIONS.contacts, contactId, withProjection(current));
       });
     } else {
-      await this.store.update(COLLECTIONS.contacts, contactId, patch);
+      await this.store.runTransaction(async tx => {
+        const current = await tx.get(COLLECTIONS.contacts, contactId);
+        if (!current || current.orgId !== orgId) throw new NotFoundError("Contact");
+        tx.update(COLLECTIONS.contacts, contactId, withProjection(current));
+      });
     }
     if (input.relationshipType && input.relationshipType !== before.relationshipType) {
       const conversations = await this.store.find(COLLECTIONS.conversations, {
@@ -175,6 +193,10 @@ export class ContactService {
       }
     }
     await this.audit.write(actorAudit(actor, orgId, "CONTACT_UPDATED", "CONTACT", contactId, before, patch));
+    if (this.marketingSafety && (input.marketingOptOut === true || input.marketingConsent?.status === 'OPTED_OUT' || input.optInStatus === 'OPTED_OUT' || input.doNotMarket === true || input.stopAllCommunications === true || input.status === 'BLOCKED')) {
+      const changed = await this.get(orgId, contactId);
+      for (const phone of new Set([before.primaryPhone, changed.primaryPhone].filter(Boolean))) await this.marketingSafety.suppressInbound(orgId, contactId, { messageId: `contact-stop-${createId('auditLog')}`, senderId: phone }, input.stopAllCommunications || input.status === 'BLOCKED' ? 'all' : 'marketing');
+    }
     return this.get(orgId, contactId);
   }
 
@@ -296,8 +318,12 @@ export class ContactService {
   }
 
   async merge(orgId, primaryId, duplicateId, actor = {}) {
+    // The legacy merge rewrites only one page per relation and predates destination
+    // permission evidence. Do not let it partially move upgraded client histories.
+    if (this.classificationEnabled) throw new ConflictError("Duplicate merge is unavailable in the upgraded directory. Keep both records for review; no records have been moved.");
     if (primaryId === duplicateId) throw new ConflictError("Primary and duplicate contacts must differ");
     const [primary, duplicate] = await Promise.all([this.get(orgId, primaryId), this.get(orgId, duplicateId)]);
+    if (primary.crmV1Version || duplicate.crmV1Version) throw new ConflictError("Upgraded client records require a reviewed transactional merge. No records have been moved.");
     if (duplicate.status === "MERGED") throw new ConflictError("Duplicate contact is already merged");
     const timestamp = now();
     const relations = [

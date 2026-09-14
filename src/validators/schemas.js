@@ -22,7 +22,7 @@ export const contactCreateSchema = z.object({
   country: z.string().trim().max(120).optional().default("India"),
   address: z.string().trim().max(1000).optional().default(""),
   gstNumber: z.string().trim().max(30).optional().default(""),
-  relationshipType: z.enum(["EXISTING_CLIENT", "PROSPECT", "LEAD", "VENDOR", "OTHER"]).optional().default("PROSPECT"),
+  relationshipType: z.enum(["EXISTING_CLIENT", "PROSPECT", "LEAD", "VENDOR", "OTHER"]).optional(),
   salesPersonName: z.string().trim().max(160).optional().default(""),
   assignedTo: id.nullable().optional(),
   tags: z.array(z.string().trim().max(60)).max(50).optional().default([]),
@@ -303,6 +303,14 @@ export const leadSchema = z.object({
 });
 
 export const quotationSchema = z.object({
+  clientRequestId: z.string().trim().min(8).max(100).optional(),
+  expectedRevision: z.number().int().positive().optional(),
+  quotationNumber: z.string().trim().min(1).max(60).optional(),
+  companyName: z.string().trim().min(1).max(200).optional(),
+  phone: z.string().trim().max(30).optional(),
+  city: z.string().trim().max(120).optional(),
+  preparedBy: z.string().trim().max(120).optional(),
+  gstPercent: z.number().finite().min(0).max(100).optional(),
   contactId: id,
   leadId: id.optional(),
   conversationId: id.optional(),
@@ -314,6 +322,8 @@ export const quotationSchema = z.object({
   discountAmount: z.number().min(0).optional().default(0),
   items: z.array(z.object({
     description: z.string().trim().min(1).max(500),
+    product: z.string().trim().max(120).optional(),
+    variety: z.string().trim().max(120).optional(),
     quantity: z.number().positive(),
     unitPrice: z.number().min(0),
     productCode: z.string().trim().max(80).optional()

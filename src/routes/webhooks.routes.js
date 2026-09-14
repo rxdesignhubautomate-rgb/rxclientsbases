@@ -23,6 +23,8 @@ export function webhooksRoutes(container) {
             .processOne({ webhookEventId: result.webhookEventId })
             .catch((error) => req.log?.error({ error: error.message, webhookEventId: result.webhookEventId }, "vercel_inbound_processing_failed"))
         );
+      } else if (container.env.WORKERS_ENABLED && result.webhookEventId) {
+        container.workers.inbound.wake();
       }
       res.status(200).json({ received: true, duplicate: result.duplicate });
     } catch (error) {

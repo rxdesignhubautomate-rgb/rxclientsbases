@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { COLLECTIONS } from "../config/constants.js";
+import { qualifyingOrder } from './client-classification.js';
 import { normalizePhone } from "../utils/phone.js";
 import { sha256 } from "../utils/hashing.js";
 import { now } from "../utils/dates.js";
@@ -119,12 +120,13 @@ export class ProcessOrderSyncService {
     });
 
     await this.marketing.attributeOrder(orgId, contact.contactId, orderId);
+    const qualifies = qualifyingOrder({ ...orderPatch, orderId });
     await this.contacts.update(orgId, contact.contactId, {
-      relationshipType: "EXISTING_CLIENT",
+      ...(qualifies ? { relationshipType: "EXISTING_CLIENT" } : {}),
       city: contact.city || input.order.city || "",
       salesPersonName: contact.salesPersonName || input.order.salesPerson || "",
-      tags: unique([...(contact.tags || []), "EXISTING_CLIENT", "PROCESS_ORDER"]),
-      lastOrderAt: laterDate(contact.lastOrderAt, input.order.orderDate || timestamp),
+      tags: unique([...(contact.tags || []), ...(qualifies ? ['EXISTING_CLIENT'] : []), "PROCESS_ORDER"]),
+      ...(qualifies && input.order.orderDate ? { lastOrderAt: laterDate(contact.lastOrderAt, input.order.orderDate) } : {}),
       updatedAt: timestamp
     }, { actorType: "SYSTEM", actorId: SOURCE });
     await this.audit.write({
@@ -198,9 +200,9 @@ export class ProcessOrderSyncService {
         primaryPhone: phone || undefined,
         city: order.city || "",
         country: "India",
-        relationshipType: "EXISTING_CLIENT",
+        relationshipType: "OTHER",
         salesPersonName: order.salesPerson || "",
-        tags: ["EXISTING_CLIENT", "PROCESS_ORDER"],
+        tags: ["PROCESS_ORDER"],
         source: SOURCE,
         status: "ACTIVE"
       }, { actorType: "SYSTEM", actorId: SOURCE });

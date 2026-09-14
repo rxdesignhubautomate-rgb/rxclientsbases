@@ -1,9 +1,10 @@
+import { APP_VERSION } from "./version.js";
 import pino from "pino";
 import { env } from "./env.js";
 
 export const logger = pino({
   level: env.LOG_LEVEL,
-  base: { service: "rx-communication-crm", version: "2.13.0" },
+  base: { service: "rx-communication-crm", version: APP_VERSION },
   redact: {
     paths: [
       "req.headers.authorization",
@@ -19,3 +20,4 @@ export const logger = pino({
     censor: "[REDACTED]"
   }
 });
+

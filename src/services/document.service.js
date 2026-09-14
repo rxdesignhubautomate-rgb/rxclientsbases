@@ -1,5 +1,6 @@
 import PDFDocument from "pdfkit";
 import { COLLECTIONS } from "../config/constants.js";
+import { ConflictError } from "../utils/errors.js";
 import { now } from "../utils/dates.js";
 
 export class DocumentService {
@@ -12,6 +13,7 @@ export class DocumentService {
 
   async generateQuotationPdf(orgId, quotationId) {
     const quotation = await this.domain.get("quotations", orgId, quotationId);
+    if (quotation.status !== 'DRAFT') throw new ConflictError('This quotation is locked. Download the saved PDF.');
     const buffer = await renderQuotation(quotation);
     const attachment = await this.media.storeBuffer({
       orgId,
@@ -22,31 +24,41 @@ export class DocumentService {
       mimeType: "application/pdf",
       originalFilename: `${quotationId}.pdf`
     });
-    await this.store.update(COLLECTIONS.quotations, quotationId, {
+    await this.store.runTransaction(async tx => {
+      const current = await tx.get(COLLECTIONS.quotations, quotationId);
+      if (current.status !== 'DRAFT' || (current.revision || 1) !== (quotation.revision || 1)) throw new ConflictError('Quotation changed. Generate a new PDF.');
+      tx.update(COLLECTIONS.quotations, quotationId, {
       pdfAttachmentId: attachment.attachmentId,
       pdfGeneratedAt: now(),
+      pdfRevision: quotation.revision || 1,
       updatedAt: now()
+      });
     });
     return attachment;
   }
 
   async sendQuotation(orgId, quotationId, actor) {
     const quotation = await this.domain.get("quotations", orgId, quotationId);
+    if (quotation.queuedMessageId) return { duplicate: true, message: await this.messages.get(orgId, quotation.queuedMessageId) };
+    if (!quotation.conversationId) throw new ConflictError('Open this client in WhatsApp before sending the quotation');
+    if (['ACCEPTED','REJECTED','CANCELLED'].includes(quotation.status)) throw new ConflictError('This quotation is closed');
+    const conversation = await this.messages.conversations.get(orgId,quotation.conversationId);
+    if (conversation.contactId !== quotation.contactId) throw new ConflictError('Quotation and conversation must belong to the same client');
+    if (quotation.revision && quotation.pdfRevision !== quotation.revision) throw new ConflictError('Preview and save the current quotation PDF before sending');
     const attachment = quotation.pdfAttachmentId
       ? await this.media.get(orgId, quotation.pdfAttachmentId)
       : await this.generateQuotationPdf(orgId, quotationId);
     const queued = await this.messages.queueOutbound({
       orgId,
       conversationId: quotation.conversationId,
-      text: `Quotation ${quotationId} from RX Design Hub`,
+      text: `Quotation ${quotation.quotationNumber || quotationId} from RX Design Hub`,
       type: "DOCUMENT",
       attachmentIds: [attachment.attachmentId],
       senderType: "AGENT",
       senderId: actor.userId,
-      metadata: { quotationId },
-      idempotencyKey: `QUOTATION:${quotationId}:${quotation.updatedAt?.toMillis?.() || quotation.updatedAt || "v1"}`
+      metadata: { quotationId, quotationRevision: quotation.revision || 1 },
+      idempotencyKey: `QUOTATION:${quotationId}:${quotation.revision || "v1"}`
     });
-    await this.domain.update("quotations", orgId, quotationId, { status: "SENT", sentAt: now() }, actor, "SENT");
     if (quotation.leadId) {
       await this.domain.update("leads", orgId, quotation.leadId, { leadStatus: "QUOTATION_SENT", quotationSent: true }, actor, "STATUS_CHANGED");
     }

@@ -4,13 +4,18 @@ import { normalizeWhatsAppWebhook } from "./whatsapp.normalizer.js";
 import { normalizeIndianPhoneNumber, validatePhoneNumber } from "../../utils/phone.js";
 
 export class WhatsAppMetaAdapter extends BaseChannelAdapter {
-  constructor({ accessToken, appSecret, graphApiVersion = "v25.0", requestTimeoutMs = 15000, fetchImpl = fetch }) {
+  constructor({ accessToken, appSecret, graphApiVersion = "v25.0", requestTimeoutMs = 15000, fetchImpl = fetch, allowLiveRequests = false }) {
     super();
     this.accessToken = accessToken;
     this.appSecret = appSecret;
     this.graphApiVersion = graphApiVersion;
     this.requestTimeoutMs = requestTimeoutMs;
     this.fetch = fetchImpl;
+    this.allowLiveRequests = allowLiveRequests || fetchImpl !== globalThis.fetch;
+  }
+
+  assertTransportAllowed() {
+    if (!this.allowLiveRequests) throw new ChannelError('Live WhatsApp requests are disabled in this development environment', { status: 409, code: 'DEVELOPMENT_TRANSPORT_BLOCKED', retryable: false });
   }
 
   async verifyWebhook({ rawBody, signature, allowUnsigned = false }) {
@@ -57,6 +62,7 @@ export class WhatsAppMetaAdapter extends BaseChannelAdapter {
   }
 
   async uploadMedia({ account, buffer, mimeType, filename }) {
+    this.assertTransportAllowed();
     const contentType = mimeType || "application/octet-stream";
     const form = new FormData();
     form.append("messaging_product", "whatsapp");
@@ -93,7 +99,7 @@ export class WhatsAppMetaAdapter extends BaseChannelAdapter {
 
   async downloadMedia({ media }) {
     const metadata = await this.request(`/${media.providerMediaId}`, { method: "GET" });
-    const response = await this.fetch(metadata.url, { headers: { Authorization: `Bearer ${this.accessToken}` } });
+    const response = await this.fetch(metadata.url, { signal: globalThis.AbortSignal.timeout(60_000), headers: { Authorization: `Bearer ${this.accessToken}` } });
     if (!response.ok) throw await channelError(response, "WhatsApp media download failed");
     return {
       buffer: Buffer.from(await response.arrayBuffer()),
@@ -139,6 +145,7 @@ export class WhatsAppMetaAdapter extends BaseChannelAdapter {
   }
 
   async request(path, options) {
+    this.assertTransportAllowed();
     try {
       const response = await this.fetch(`https://graph.facebook.com/${this.graphApiVersion}${path}`, {
         ...options,
@@ -155,6 +162,7 @@ export class WhatsAppMetaAdapter extends BaseChannelAdapter {
       if (error?.name === "TimeoutError" || error?.name === "AbortError") {
         throw new ChannelError("WhatsApp API request timed out", { status: 504, code: "META_TIMEOUT", retryable: true });
       }
+      if (error?.name === 'TypeError' && /fetch|network/i.test(error.message)) throw new ChannelError('Provider connection failed without a response', { status: 502, code: 'META_NETWORK_UNKNOWN', retryable: false });
       throw error;
     }
   }

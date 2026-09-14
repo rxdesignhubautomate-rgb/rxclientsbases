@@ -1,4 +1,5 @@
 import { COLLECTIONS } from "../config/constants.js";
+import { qualifyingOrder } from './client-classification.js';
 import { normalizePhone } from "../utils/phone.js";
 import { sha256 } from "../utils/hashing.js";
 import { now } from "../utils/dates.js";
@@ -143,13 +144,14 @@ export class OrderRegisterImportService {
         }
 
         const current = await this.contacts.get(orgId, resolved.contact.contactId);
+        const qualifies = qualifyingOrder(order);
         await this.contacts.update(orgId, current.contactId, {
-          relationshipType: "EXISTING_CLIENT",
+          ...(qualifies ? { relationshipType: "EXISTING_CLIENT" } : {}),
           salesPersonName: current.salesPersonName || row.salesPersonName,
           assignedTo: current.assignedTo || assignedTo,
           city: current.city || row.city,
-          tags: unique([...(current.tags || []), "EXISTING_CLIENT", "IMPORTED_ORDER_REGISTER"]),
-          lastOrderAt: laterDate(current.lastOrderAt, row.orderDate),
+          tags: unique([...(current.tags || []), ...(qualifies ? ['EXISTING_CLIENT'] : []), "IMPORTED_ORDER_REGISTER"]),
+          ...(qualifies && row.orderDate ? { lastOrderAt: laterDate(current.lastOrderAt, row.orderDate) } : {}),
           updatedAt: now()
         }, actor);
 
@@ -225,10 +227,10 @@ export class OrderRegisterImportService {
       primaryPhone: phoneForNewContact || undefined,
       city: row.city,
       country: "India",
-      relationshipType: "EXISTING_CLIENT",
+      relationshipType: "OTHER",
       salesPersonName: row.salesPersonName,
       assignedTo,
-      tags: unique(["EXISTING_CLIENT", "IMPORTED_ORDER_REGISTER", ...(phoneForNewContact ? [] : row.rawPhone ? ["PHONE_REVIEW"] : [])]),
+      tags: unique(["IMPORTED_ORDER_REGISTER", ...(phoneForNewContact ? [] : row.rawPhone ? ["PHONE_REVIEW"] : [])]),
       notes: row.rawPhone && !phoneForNewContact ? `Imported phone needs review: ${row.rawPhone}` : "",
       source: "MANUAL",
       status: "ACTIVE"

@@ -4,6 +4,7 @@ import { sha256 } from "../utils/hashing.js";
 import { now } from "../utils/dates.js";
 import { ConflictError, NotFoundError } from "../utils/errors.js";
 import { customerServiceWindow } from "./conversation.service.js";
+import { canonicalDestination, destinationKey } from './marketing-safety.service.js';
 
 export class MessageService {
   constructor({ store, conversations, contacts, channelAccounts, channelManager = null, audit }) {
@@ -49,6 +50,7 @@ export class MessageService {
       const key = await tx.get(COLLECTIONS.providerMessageKeys, providerKeyId);
       if (key) return { duplicate: true, message: await tx.get(COLLECTIONS.messages, key.messageId) };
       const conversation = await tx.get(COLLECTIONS.conversations, input.conversationId);
+      const contact = await tx.get(COLLECTIONS.contacts, input.contactId);
       message.inboundSequence = Number(conversation?.inboundSequence || 0) + 1;
       tx.create(COLLECTIONS.messages, messageId, message);
       tx.create(COLLECTIONS.providerMessageKeys, providerKeyId, {
@@ -68,7 +70,8 @@ export class MessageService {
         currentChannelAccountId: input.channelAccountId,
         updatedAt: timestamp
       });
-      tx.update(COLLECTIONS.contacts, input.contactId, { lastInteractionAt: timestamp, updatedAt: timestamp });
+      const meaningfulAt = Math.max(Number(contact?.crmV1LastMeaningfulAtMs || -1), Math.min(toSafeDate(input.providerTimestamp)?.getTime() || timestamp.getTime(), timestamp.getTime()));
+      tx.update(COLLECTIONS.contacts, input.contactId, { lastInteractionAt: timestamp, ...(contact?.crmV1Version === 1 && input.type !== 'REACTION' && input.type !== 'SYSTEM' ? { crmV1LastMeaningfulAtMs: meaningfulAt } : {}), updatedAt: timestamp });
       return { duplicate: false, message };
     });
   }
@@ -135,6 +138,8 @@ export class MessageService {
       outboxId,
       orgId,
       messageId,
+      ...(metadata.campaignId ? { campaignId: metadata.campaignId } : {}),
+      ...(this.marketingSafety && await this.marketingSafety.category(message) === 'MARKETING' && canonicalDestination(message.recipientId) ? { marketingDestinationKey: destinationKey(orgId, canonicalDestination(message.recipientId)) } : {}),
       channel: message.channel,
       channelAccountId: message.channelAccountId,
       status: "PENDING",
@@ -147,12 +152,20 @@ export class MessageService {
       updatedAt: timestamp
     };
     const result = await this.store.runTransaction(async (tx) => {
-      if (idempotencyKey) {
-        const keyId = sha256(`${orgId}:OUTBOUND:${idempotencyKey}`);
+      const quotationId = metadata.quotationId;
+      const keyId = idempotencyKey ? sha256(`${orgId}:OUTBOUND:${idempotencyKey}`) : null;
+      if (keyId) {
         const key = await tx.get(COLLECTIONS.providerMessageKeys, keyId);
         if (key) return { duplicate: true, message: await tx.get(COLLECTIONS.messages, key.messageId) };
-        tx.create(COLLECTIONS.providerMessageKeys, keyId, { orgId, messageId, kind: "OUTBOUND", createdAt: timestamp });
       }
+      if (quotationId) {
+        const quote = await tx.get(COLLECTIONS.quotations, quotationId);
+        if (!quote || quote.orgId !== orgId || quote.contactId !== conversation.contactId || quote.conversationId !== conversationId || quote.status !== "DRAFT" || (quote.revision || 1) !== metadata.quotationRevision || quote.pdfAttachmentId !== attachmentIds[0]) {
+          throw new ConflictError("Quotation changed. Reopen the current preview before sending.");
+        }
+      }
+      if (keyId) tx.create(COLLECTIONS.providerMessageKeys, keyId, { orgId, messageId, kind: "OUTBOUND", createdAt: timestamp });
+      if (quotationId) tx.update(COLLECTIONS.quotations, quotationId, { status: "QUEUED", queuedAt: timestamp, queuedMessageId: messageId, updatedAt: timestamp });
       tx.create(COLLECTIONS.messages, messageId, message);
       tx.create(COLLECTIONS.outbox, outboxId, outbox);
       tx.update(COLLECTIONS.conversations, conversationId, {
@@ -366,7 +379,18 @@ export class MessageService {
     return { ...message, status: "READ", providerReadReceipt: receipt, conversationUnreadCount };
   }
 
-  async updateProviderStatus(orgId, providerMessageId, status, error = null, providerTimestamp = null, providerMetadata = null) {
+  async reconcileProviderStatus(orgId, providerMessageId) {
+    const events = await this.store.getMany('providerStatusReceipts', ['SENT', 'DELIVERED', 'READ', 'FAILED'].map(status => sha256(`${orgId}:${providerMessageId}:${status}`)));
+    for (const event of events) if (!event.applied) await this.updateProviderStatus(orgId, providerMessageId, event.status, event.error, event.providerTimestamp, event.providerMetadata, true);
+  }
+
+  async updateProviderStatus(orgId, providerMessageId, status, error = null, providerTimestamp = null, providerMetadata = null, replay = false) {
+    const receiptId = sha256(`${orgId}:${providerMessageId}:${String(status).toUpperCase()}`);
+    // Persist first, then look up: a callback may precede the send response mapping.
+    if (!replay) await this.store.runTransaction(async tx => {
+      const existing = await tx.get('providerStatusReceipts', receiptId);
+      if (!existing) tx.create('providerStatusReceipts', receiptId, { orgId, providerMessageId, status, error, providerTimestamp, providerMetadata, applied: false, receivedAt: now() });
+    });
     const result = await this.store.find(COLLECTIONS.messages, {
       filters: [["orgId", "==", orgId], ["providerMessageId", "==", providerMessageId]],
       limit: 2
@@ -391,15 +415,17 @@ export class MessageService {
         : null;
       const seen = { ...(current.providerStatusSeen || {}) };
       const isFirst = !seen[normalizedStatus];
-      seen[normalizedStatus] = statusAt;
+      if (isFirst) seen[normalizedStatus] = statusAt;
+      const nextStatus = advancedStatus(current.status, normalizedStatus);
+      const applies = nextStatus === normalizedStatus;
       const patch = {
-        status: advancedStatus(current.status, normalizedStatus),
+        status: nextStatus,
         providerStatusSeen: seen,
         statusTimestamp: statusAt,
-        errorCode: error?.code || null,
-        errorTitle: error?.title || error?.message?.slice(0, 200) || null,
-        errorDetails: error?.details || error?.message?.slice(0, 500) || null,
-        errorMessage: error?.message?.slice(0, 500) || null,
+        errorCode: applies ? error?.code || null : current.errorCode || null,
+        errorTitle: applies ? error?.title || error?.message?.slice(0, 200) || null : current.errorTitle || null,
+        errorDetails: applies ? error?.details || error?.message?.slice(0, 500) || null : current.errorDetails || null,
+        errorMessage: applies ? error?.message?.slice(0, 500) || null : current.errorMessage || null,
         providerStatusMetadata: providerMetadata || current.providerStatusMetadata || null,
         updatedAt: now()
       };
@@ -428,13 +454,13 @@ export class MessageService {
       }
       if (isFirst && enrollmentId) {
         tx.update(COLLECTIONS.campaignEnrollments, enrollmentId, {
-          lastDeliveryStatus: normalizedStatus,
+          lastDeliveryStatus: nextStatus,
           lastDeliveryStatusAt: statusAt,
-          ...(normalizedStatus === "FAILED" ? { failureReason: error?.message?.slice(0, 500) || "META_DELIVERY_FAILED" } : {}),
+          ...(nextStatus === "FAILED" ? { failureReason: error?.message?.slice(0, 500) || "META_DELIVERY_FAILED" } : { failureReason: null }),
           updatedAt: now()
         });
       }
-      if (isFirst && campaignId && ["DELIVERED", "READ", "FAILED"].includes(normalizedStatus)) {
+      if (isFirst && campaignId && ["DELIVERED", "READ", "FAILED"].includes(normalizedStatus) && (normalizedStatus !== 'FAILED' || applies)) {
         if (campaign) {
           const key = normalizedStatus.toLowerCase();
           const stats = { ...(campaign.stats || {}), [key]: Number(campaign.stats?.[key] || 0) + 1 };
@@ -450,6 +476,7 @@ export class MessageService {
           updatedAt: now()
         });
       }
+      tx.update('providerStatusReceipts', receiptId, { applied: true, messageId, appliedAt: now() });
     });
     return { ...message, status: advancedStatus(message.status, normalizedStatus), duplicateStatus: !firstOccurrence };
   }
@@ -464,7 +491,8 @@ function toSafeDate(value) {
 }
 
 function advancedStatus(current, incoming) {
-  if (incoming === "FAILED") return "FAILED";
+  if (incoming === "FAILED") return ['DELIVERED', 'READ'].includes(current) ? current : 'FAILED';
+  if (current === 'FAILED' && incoming === 'SENT') return current;
   const rank = { QUEUED: 0, SENDING: 1, SENT: 2, DELIVERED: 3, READ: 4 };
   return (rank[incoming] ?? 0) >= (rank[current] ?? 0) ? incoming : current;
 }

@@ -1,4 +1,5 @@
 import { encodeCursor } from "../utils/pagination.js";
+import { Filter } from 'firebase-admin/firestore';
 
 export class FirestoreStore {
   constructor(db) {
@@ -36,7 +37,7 @@ export class FirestoreStore {
     return { id, ...data };
   }
 
-  async find(collection, { filters = [], orderBy, limit = 25, cursor, search, searchFields = [] } = {}) {
+  async find(collection, { filters = [], orderBy, limit = 25, cursor, search, searchFields = [], select } = {}) {
     let query = this.db.collection(collection);
     for (const [field, operator, value] of filters) query = query.where(field, operator, value);
     if (orderBy?.[0]) query = query.orderBy(orderBy[0], orderBy[1] || "desc");
@@ -45,6 +46,7 @@ export class FirestoreStore {
       if (cursorDoc.exists) query = query.startAfter(cursorDoc);
     }
     const fetchLimit = search ? Math.min(limit * 5 + 1, 500) : limit + 1;
+    if (select?.length) query = query.select(...select);
     const snap = await query.limit(fetchLimit).get();
     let items = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     if (search) {
@@ -66,6 +68,22 @@ export class FirestoreStore {
     for (const [field, operator, value] of filters) query = query.where(field, operator, value);
     const snapshot = await query.count().get();
     return Number(snapshot.data().count || 0);
+  }
+
+  async findWhere(collection, { where, limit = 50, cursor, orderBy } = {}) {
+    let query = this.db.collection(collection).where(nativeFilter(where));
+    for (const field of inequalityFields(where)) query = query.orderBy(field, 'asc');
+    if (orderBy && !inequalityFields(where).length) query = query.orderBy(orderBy[0], orderBy[1]);
+    query = query.orderBy('__name__', orderBy && !inequalityFields(where).length ? orderBy[1] : 'asc');
+    if (cursor) { const doc = await this.db.collection(collection).doc(cursor).get(); if (!doc.exists) throw new Error('Cursor no longer exists'); query = query.startAfter(doc); }
+    const snap = await query.limit(limit + 1).get();
+    const items = snap.docs.slice(0, limit).map(doc => ({ id: doc.id, ...doc.data() }));
+    return { items, pagination: { hasMore: snap.docs.length > limit, nextCursor: snap.docs.length > limit ? encodeCursor(items.at(-1).id) : null } };
+  }
+
+  async countWhere(collection, where) {
+    const snap = await this.db.collection(collection).where(nativeFilter(where)).count().get();
+    return snap.data().count;
   }
 
   async runTransaction(callback) {
@@ -109,4 +127,14 @@ export class FirestoreStore {
     }
     return changed;
   }
+}
+
+function nativeFilter(node) {
+  if (node.and) return Filter.and(...node.and.map(nativeFilter));
+  if (node.or) return Filter.or(...node.or.map(nativeFilter));
+  return Filter.where(node.field, node.op, node.value);
+}
+
+function inequalityFields(node) {
+  return [...new Set(node.and || node.or ? (node.and || node.or).flatMap(inequalityFields) : ['<', '<=', '>', '>=', '!='].includes(node.op) ? [node.field] : [])].sort();
 }

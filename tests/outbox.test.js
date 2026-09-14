@@ -38,13 +38,13 @@ describe("outbox processing", () => {
     const core = makeCore();
     const { conversation } = await seedConversation(core);
     const queued = await core.messages.queueOutbound({ orgId: "RXDH", conversationId: conversation.conversationId, text: "Retry me" });
-    const error = Object.assign(new Error("temporary"), { code: "TIMEOUT", retryable: true });
+    const error = Object.assign(new Error("temporary"), { code: "RATE_LIMIT", retryable: true });
     const logger = { error: vi.fn(), warn: vi.fn() };
     await worker(core, vi.fn().mockRejectedValue(error), { logger }).processOne(queued.outbox);
     expect((await core.store.get(COLLECTIONS.outbox, queued.outbox.outboxId)).status).toBe("RETRY");
     expect((await core.messages.get("RXDH", queued.message.messageId)).status).toBe("QUEUED");
     expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({
-      code: "TIMEOUT",
+      code: "RATE_LIMIT",
       message: "temporary",
       messageId: queued.message.messageId,
       attemptCount: 1,

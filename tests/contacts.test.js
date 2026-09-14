@@ -3,6 +3,17 @@ import { COLLECTIONS } from "../src/config/constants.js";
 import { makeCore } from "./helpers/core.js";
 
 describe("contact service", () => {
+  it("blocks the legacy partial merge before any upgraded client history can move", async () => {
+    const core = makeCore(); core.contacts.classificationEnabled = true;
+    const primary = await core.contacts.create('RXDH', { primaryPhone: '9876543210' });
+    const duplicate = await core.contacts.create('RXDH', { primaryPhone: '9123456789' });
+    await core.store.update(COLLECTIONS.contacts, duplicate.contactId, { marketingOptOut: true });
+    await core.store.create(COLLECTIONS.messages, 'KEEP_MSG', { orgId: 'RXDH', contactId: duplicate.contactId });
+    await expect(core.contacts.merge('RXDH', primary.contactId, duplicate.contactId)).rejects.toThrow(/unavailable/);
+    expect((await core.store.get(COLLECTIONS.messages, 'KEEP_MSG')).contactId).toBe(duplicate.contactId);
+    expect(await core.contacts.get('RXDH', duplicate.contactId)).toMatchObject({ status: 'ACTIVE', marketingOptOut: true });
+    expect((await core.contacts.get('RXDH', primary.contactId)).phones).toEqual(['919876543210']);
+  });
   it("creates a permanent contact and normalizes its phone", async () => {
     const core = makeCore();
     const contact = await core.contacts.create("RXDH", { companyName: "ABC Pharma", primaryPhone: "98765 43210" });

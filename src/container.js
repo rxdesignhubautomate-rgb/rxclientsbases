@@ -37,6 +37,14 @@ import { SmartMessageService } from "./services/smart-message.service.js";
 import { CampaignWorker } from "./workers/campaign.worker.js";
 import { QuickReplyService } from "./services/quick-reply.service.js";
 import { ProcessOrderSyncService } from "./services/process-order-sync.service.js";
+import { QuotationService } from "./services/quotation.service.js";
+import { ClientDirectoryService } from "./services/client-directory.service.js";
+import { MarketingSafetyService } from "./services/marketing-safety.service.js";
+import { CrmMarketingWorkspaceService } from './services/crm-marketing-workspace.service.js';
+import { CrmContactTransferService } from './services/crm-contact-transfer.service.js';
+import { CrmReportsService } from './services/crm-reports.service.js';
+import { CrmClientWorkspaceService } from './services/crm-client-workspace.service.js';
+import { CrmBulkClientsService } from './services/crm-bulk-clients.service.js';
 
 let singleton;
 
@@ -47,6 +55,11 @@ export function createContainer(overrides = {}) {
   const audit = new AuditService(store);
   const notifications = new NotificationService(store);
   const contacts = new ContactService({ store, audit, notifications });
+  const clientDirectory = new ClientDirectoryService({ store, enabled: env.CRM_DIRECTORY_ENABLED, inactivityDays: env.CRM_INACTIVITY_DAYS });
+  contacts.classificationEnabled = env.CRM_DIRECTORY_ENABLED;
+  const marketingSafety = env.CRM_MARKETING_UPGRADE_ENABLED ? new MarketingSafetyService({ store, directory: clientDirectory, dispatchEnabled: env.CRM_MARKETING_DISPATCH_ENABLED && env.NODE_ENV === 'production' }) : null;
+  clientDirectory.marketingSafety = marketingSafety;
+  contacts.marketingSafety = marketingSafety;
   const channelAccounts = new ChannelAccountService({ store, audit });
   const conversations = new ConversationService({ store, audit, defaultAiMode: env.AI_DEFAULT_MODE });
   const channelManager = new ChannelManager();
@@ -54,7 +67,8 @@ export function createContainer(overrides = {}) {
     accessToken: env.META_ACCESS_TOKEN,
     appSecret: env.META_APP_SECRET,
     graphApiVersion: env.META_GRAPH_API_VERSION,
-    requestTimeoutMs: env.META_REQUEST_TIMEOUT_MS
+    requestTimeoutMs: env.META_REQUEST_TIMEOUT_MS,
+    allowLiveRequests: env.NODE_ENV === 'production'
   });
   channelManager
     .register("WHATSAPP", "META_CLOUD_API", whatsappAdapter)
@@ -62,6 +76,7 @@ export function createContainer(overrides = {}) {
     .register("EMAIL", "UNCONFIGURED", new EmailChannelAdapter());
   const messages = new MessageService({ store, conversations, contacts, channelAccounts, channelManager, audit });
   const domain = new DomainService({ store, audit, orgTimeZone: env.ORG_TIMEZONE });
+  const quotations = new QuotationService({ store, domain, audit });
   const imports = new OrderRegisterImportService({ store, contacts, domain, audit });
   const assignment = new AssignmentService(store);
   const timeline = new TimelineService(store);
@@ -118,6 +133,17 @@ export function createContainer(overrides = {}) {
     marketing,
     audit
   });
+  marketing.clientDirectory = clientDirectory;
+  marketing.safety = marketingSafety;
+  messages.marketingSafety = marketingSafety;
+  smartMessages.marketingSafety = marketingSafety;
+  const marketingWorkspace = marketingSafety ? new CrmMarketingWorkspaceService({ store, directory: clientDirectory, safety: marketingSafety, templateRegistry, contacts, conversations, channelAccounts, messages, domain }) : null;
+  if (marketingWorkspace) marketingWorkspace.transfer = new CrmContactTransferService({ store, directory: clientDirectory, workspace: marketingWorkspace });
+  if (marketingWorkspace) marketingWorkspace.reports = new CrmReportsService({ store, directory: clientDirectory, workspace: marketingWorkspace });
+  if (marketingWorkspace) marketingWorkspace.clients = new CrmClientWorkspaceService({ store, directory: clientDirectory, workspace: marketingWorkspace });
+  clientDirectory.bulk = new CrmBulkClientsService({ store, directory: clientDirectory });
+  marketing.workspace = marketingWorkspace;
+  if (marketingWorkspace) domain.onOrderChanged = (orgId, orderId) => store.get('orders', orderId).then(order => marketing.attributeOrder(orgId, order.contactId, orderId));
   const media = new MediaService({
     store,
     bucket: overrides.bucket || firebase.bucket,
@@ -199,6 +225,10 @@ export function createContainer(overrides = {}) {
     batchSize: env.CAMPAIGN_BATCH_SIZE,
     logger
   });
+  messages.onQueued = () => outboundWorker.wake();
+  outboundWorker.marketingSafety = marketingSafety;
+  outboundWorker.reconcileProviderStatus = (orgId, providerMessageId) => messages.reconcileProviderStatus(orgId, providerMessageId);
+  outboundWorker.onAccepted = marketingWorkspace ? (message, tx) => marketingWorkspace.acceptedMessage(message, tx) : null;
   return {
     env,
     firebase,
@@ -207,6 +237,9 @@ export function createContainer(overrides = {}) {
     audit,
     notifications,
     contacts,
+    clientDirectory,
+    marketingSafety,
+    marketingWorkspace,
     channelAccounts,
     conversations,
     messages,
@@ -226,6 +259,7 @@ export function createContainer(overrides = {}) {
     processOrderSync,
     media,
     documents,
+    quotations,
     ai,
     webhook,
     channelManager,

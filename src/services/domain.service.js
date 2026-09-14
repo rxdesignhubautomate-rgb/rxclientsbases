@@ -117,6 +117,7 @@ export class DomainService {
       await this.store.create(cfg.collection, id, document);
     }
     await this.touchConversations(orgId, document.contactId);
+    if (resource === 'orders') await this.onOrderChanged?.(orgId, id);
     await this.audit.write({ orgId, actorType: actor.userId ? "USER" : "SYSTEM", actorId: actor.userId || "SYSTEM", action: `${resource.toUpperCase()}_CREATED`, entityType: resource.toUpperCase(), entityId: id, after: document });
     return this.get(resource, orgId, id);
   }
@@ -125,6 +126,7 @@ export class DomainService {
     const cfg = resourceConfig(resource);
     const document = await this.store.get(cfg.collection, id);
     if (!document || document.orgId !== orgId) throw new NotFoundError(resource.slice(0, -1));
+    if (resource === 'quotations' && Array.isArray(document.itemsSnapshot)) return {...document,items:document.itemsSnapshot};
     if (["quotations", "orders"].includes(resource)) {
       const itemCollection = resource === "quotations" ? COLLECTIONS.quotationItems : COLLECTIONS.orderItems;
       const items = await this.store.find(itemCollection, {
@@ -151,7 +153,7 @@ export class DomainService {
       limit: options.limit,
       cursor: options.cursor,
       search: options.search,
-      searchFields: ["companyName", "mobileNumber", "remarks", "notes", "status"]
+      searchFields: ["companyName", "mobileNumber", "phone", "quotationNumber", "remarks", "notes", "status"]
     });
     if (!options.relationshipTypes?.length) return result;
     const contacts = await Promise.all([...new Set(result.items.map(item => item.contactId).filter(Boolean))].map(id => this.store.get(COLLECTIONS.contacts,id)));
@@ -169,6 +171,7 @@ export class DomainService {
     delete safePatch.items;
     if (resource === "leads") safePatch.lastUpdatedBy = actor.userId || "SYSTEM";
     await this.store.update(cfg.collection, id, safePatch);
+    if (resource === 'orders') await this.onOrderChanged?.(orgId, id);
     await this.touchConversations(orgId, before.contactId);
     await this.audit.write({ orgId, actorType: actor.userId ? "USER" : "SYSTEM", actorId: actor.userId || "SYSTEM", action: `${resource.toUpperCase()}_${action}`, entityType: resource.toUpperCase(), entityId: id, before, after: safePatch });
     return this.get(resource, orgId, id);

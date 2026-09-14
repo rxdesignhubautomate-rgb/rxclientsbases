@@ -2,7 +2,7 @@ import js from "@eslint/js";
 
 export default [
   {
-    ignores: ["node_modules/**", "coverage/**", "migration-reports/**", "frontend/dist/**"]
+    ignores: ["node_modules/**", "coverage/**", "migration-reports/**", "frontend/dist/**", "frontend/src/jspdf.umd.min.js", "frontend/src/lame.min.js", "frontend/src/vendor/**"]
   },
   js.configs.recommended,
   {
@@ -25,6 +25,7 @@ export default [
         setInterval: "readonly",
         setTimeout: "readonly",
         structuredClone: "readonly"
+        , Event: 'readonly', EventTarget: 'readonly'
       }
     },
     rules: {
@@ -33,7 +34,7 @@ export default [
     }
   },
   {
-    files: ["frontend/src/**/*.js"],
+    files: ["frontend/src/**/*.js", "frontend/src/**/*.mjs"],
     languageOptions: {
       globals: {
         URLSearchParams: "readonly",
@@ -42,9 +43,12 @@ export default [
         localStorage: "readonly",
         location: "readonly",
         window: "readonly"
+        , Option: 'readonly'
+        , AbortSignal: 'readonly', btoa: 'readonly', requestAnimationFrame: 'readonly', cancelAnimationFrame: 'readonly', prompt: 'readonly', navigator: 'readonly', MediaRecorder: 'readonly', File: 'readonly', Notification: 'readonly', Worker: 'readonly', indexedDB: 'readonly', crypto: 'readonly'
       }
     }
   },
+  { files: ['frontend/src/audio-encoder.js'], languageOptions: { globals: { self: 'readonly', importScripts: 'readonly', lamejs: 'readonly' } } },
   {
     files: ["tests/**/*.js"],
     languageOptions: {

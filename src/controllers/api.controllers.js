@@ -1,3 +1,4 @@
+import { APP_VERSION } from "../config/version.js";
 import { listQuery } from "../utils/pagination.js";
 import { sendData, sendList } from "../utils/http.js";
 import { enforceAssignment } from "../middleware/authorize.js";
@@ -7,6 +8,7 @@ import { ConflictError } from "../utils/errors.js";
 import { ensureWhatsAppChannelAccount } from "../bootstrap/whatsapp-channel-account.js";
 import { CLIENT_SCOPES, relationshipTypesForScope } from "../utils/client-scope.js";
 import { validateTemplateHeaderMedia } from "../services/template-header-media.js";
+import { cachedMarketingOverview } from "../services/marketing-overview-cache.js";
 
 export function createControllers(container) {
   const c = container;
@@ -53,6 +55,11 @@ export function createControllers(container) {
       || `ORD-${String(item.orderId || "").slice(-8).toUpperCase()}` === reference
     ));
     return order?.orderId || reference;
+  };
+  const checkedQuotation = async req => {
+    const quote = await c.domain.get('quotations',org(req),req.params.quotationId);
+    await checkAssigned(req,await c.contacts.get(org(req),quote.contactId));
+    return quote;
   };
   const inboxMessages = async (orgId, result) => {
     const attachmentIds = [...new Set(result.items.flatMap((item) => item.attachmentIds || []))];
@@ -374,6 +381,8 @@ export function createControllers(container) {
       updateQuickReply: wrap(async (req, res) => sendData(res, await c.quickReplies.update(org(req), req.params.quickReplyId, req.body, actor(req))))
     },
     marketing: {
+      summary: wrap(async (req, res) => sendData(res, await cachedMarketingOverview(c.store, org(req), actor(req)))),
+      previewCampaign: wrap(async (req, res) => sendData(res, await c.marketing.previewCampaign(org(req), req.params.campaignId, actor(req)))),
       templates: wrap(async (_req, res) => sendData(res, c.marketing.listTemplates())),
       listReplied: wrap(async (req, res) => sendList(res, await c.marketing.listRepliedProspects(org(req), {
         ...listQuery(req.query),
@@ -404,10 +413,24 @@ export function createControllers(container) {
     leads: resourceController(c, "leads", scopedOptions, checkAssigned),
     quotations: {
       ...resourceController(c, "quotations", scopedOptions, checkAssigned),
-      generatePdf: wrap(async (req, res) => sendData(res, await c.documents.generateQuotationPdf(org(req), req.params.quotationId), 201)),
-      send: wrap(async (req, res) => sendData(res, await c.documents.sendQuotation(org(req), req.params.quotationId, actor(req)), 202)),
-      accept: wrap(async (req, res) => sendData(res, await c.domain.update("quotations", org(req), req.params.quotationId, { status: "ACCEPTED", acceptedAt: now() }, actor(req), "ACCEPTED"))),
-      reject: wrap(async (req, res) => sendData(res, await c.domain.update("quotations", org(req), req.params.quotationId, { status: "REJECTED", rejectedAt: now(), rejectionReason: req.body.reason || "" }, actor(req), "REJECTED")))
+      create: wrap(async (req,res) => {
+        await checkAssigned(req,await c.contacts.get(org(req),req.body.contactId));
+        return sendData(res,await c.quotations.create(org(req),req.body,actor(req)),201);
+      }),
+      update: wrap(async (req,res) => {
+        await checkedQuotation(req);
+        return sendData(res,await c.quotations.update(org(req),req.params.quotationId,req.body,actor(req)));
+      }),
+      attachPdf: wrap(async (req,res) => {
+        await checkedQuotation(req);
+        const {attachmentId,expectedRevision}=req.body;
+        if(typeof attachmentId !== 'string' || attachmentId.length<4 || attachmentId.length>80 || attachmentId.includes('/') || !Number.isInteger(expectedRevision) || expectedRevision<1) throw new ConflictError('Valid PDF attachment and quotation revision required');
+        return sendData(res,await c.quotations.attachPdf(org(req),req.params.quotationId,{attachmentId,expectedRevision}));
+      }),
+      generatePdf: wrap(async (req,res) => { await checkedQuotation(req); return sendData(res,await c.documents.generateQuotationPdf(org(req),req.params.quotationId),201); }),
+      send: wrap(async (req,res) => { await checkedQuotation(req); return sendData(res,await c.documents.sendQuotation(org(req),req.params.quotationId,actor(req)),202); }),
+      accept: wrap(async (req,res) => { await checkedQuotation(req); return sendData(res,await c.domain.update("quotations",org(req),req.params.quotationId,{status:"ACCEPTED",acceptedAt:now()},actor(req),"ACCEPTED")); }),
+      reject: wrap(async (req,res) => { await checkedQuotation(req); return sendData(res,await c.domain.update("quotations",org(req),req.params.quotationId,{status:"REJECTED",rejectedAt:now(),rejectionReason:String(req.body.reason || '').slice(0,500)},actor(req),"REJECTED")); })
     },
     followUps: {
       ...resourceController(c, "followUps", scopedOptions, checkAssigned),
@@ -506,7 +529,7 @@ export function createControllers(container) {
     system: {
       info: wrap(async (req, res) => sendData(res, {
         service: "rx-communication-crm",
-        version: "2.13.0",
+        version: APP_VERSION,
         orgId: org(req),
         features: {
           legacyDualWrite: c.env.ENABLE_LEGACY_DUAL_WRITE,
@@ -577,3 +600,4 @@ function decodeUploadName(value) {
     return encoded.slice(0, 240);
   }
 }
+

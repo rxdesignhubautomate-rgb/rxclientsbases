@@ -16,12 +16,16 @@ import { importsRoutes } from "./imports.routes.js";
 import { whatsappRoutes } from "./whatsapp.routes.js";
 import { marketingRoutes } from "./marketing.routes.js";
 import { messagePolicyRoutes } from "./message-policy.routes.js";
+import { clientDirectoryRoutes } from "./client-directory.routes.js";
+import { marketingWorkspaceRoutes } from './marketing-workspace.routes.js';
 
 export function apiRoutes(container, authenticate) {
   const router = express.Router();
   const controller = createControllers(container);
   router.use(authenticate);
   router.use(smartInboxRoutes(container));
+  if (container.marketingWorkspace) router.use('/marketing-workspace', marketingWorkspaceRoutes(container.marketingWorkspace));
+  if (container.clientDirectory) router.use("/client-directory", clientDirectoryRoutes(container.clientDirectory));
   router.use("/contacts", contactsRoutes(controller.contacts));
   router.use("/channel-identities", channelIdentitiesRoutes(controller.contacts));
   router.use("/channel-accounts", channelAccountsRoutes(controller.channelAccounts));

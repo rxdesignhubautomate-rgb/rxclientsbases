@@ -1,6 +1,6 @@
 {
   "name": "rx-communication-crm",
-  "version": "2.13.0",
+  "version": "2.18.0-dev.3",
   "private": true,
   "description": "Channel-independent customer communication and business operations platform for RX Design Hub",
   "type": "module",
@@ -28,7 +28,8 @@
     "diagnose:storage": "node src/scripts/diagnose-storage-bucket.js",
     "sync:broadcast-audiences": "node src/scripts/sync-broadcast-audiences.js",
     "seed:channel": "node src/scripts/seed-channel-account.js",
-    "seed:admin": "node src/scripts/create-admin-user.js"
+    "seed:admin": "node src/scripts/create-admin-user.js",
+    "migrate:client-classification:local": "node scripts/backfill-client-classification.mjs"
   },
   "dependencies": {
     "@vercel/functions": "^3.7.5",
@@ -38,6 +39,7 @@
     "express-rate-limit": "^7.5.0",
     "firebase-admin": "^14.2.0",
     "helmet": "^8.1.0",
+    "libphonenumber-js": "^1.13.13",
     "nodemailer": "^9.0.3",
     "openai": "^4.77.0",
     "pdfkit": "^0.16.0",

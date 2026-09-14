@@ -927,11 +927,11 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
-          "fieldPath": "orgId",
+          "fieldPath": "contactId",
           "order": "ASCENDING"
         },
         {
-          "fieldPath": "contactId",
+          "fieldPath": "orgId",
           "order": "ASCENDING"
         },
         {
@@ -940,6 +940,426 @@
         },
         {
           "fieldPath": "dueAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Relationship",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Tier",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1NeedsReview",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1LastMeaningfulAtMs",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1LastMeaningfulAtMs",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "assignedTo",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "assignedTo",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Relationship",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "assignedTo",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Tier",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "assignedTo",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1NeedsReview",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "assignedTo",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1LastMeaningfulAtMs",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "assignedTo",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1LastMeaningfulAtMs",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationshipType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationshipType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Relationship",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationshipType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Tier",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationshipType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1NeedsReview",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationshipType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1LastMeaningfulAtMs",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "contacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "orgId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1Version",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationshipType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1SearchName",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "crmV1LastMeaningfulAtMs",
           "order": "ASCENDING"
         }
       ]

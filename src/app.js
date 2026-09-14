@@ -1,3 +1,4 @@
+import { APP_VERSION } from "./config/version.js";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
@@ -60,19 +61,19 @@ export function createApp(options = {}) {
     res.json({
       status: "ok",
       service: "rx-communication-crm",
-      version: "2.13.0",
+      version: APP_VERSION,
       endpoints: { health: "/health", readiness: "/ready", api: "/api/v1" },
       timestamp: new Date().toISOString()
     });
   });
 
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", service: "rx-communication-crm", version: "2.13.0", timestamp: new Date().toISOString() });
+    res.json({ status: "ok", service: "rx-communication-crm", version: APP_VERSION, timestamp: new Date().toISOString() });
   });
   app.get("/ready", async (_req, res) => {
     try {
       await container.store.get("systemSettings", "readiness");
-      res.json({ status: "ready", service: "rx-communication-crm", version: "2.13.0", timestamp: new Date().toISOString() });
+      res.json({ status: "ready", service: "rx-communication-crm", version: APP_VERSION, timestamp: new Date().toISOString() });
     } catch {
       res.status(503).json({ status: "not_ready", service: "rx-communication-crm", timestamp: new Date().toISOString() });
     }
@@ -97,3 +98,4 @@ export function createApp(options = {}) {
   app.locals.container = container;
   return app;
 }
+

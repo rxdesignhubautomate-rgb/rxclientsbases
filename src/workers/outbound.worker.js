@@ -83,12 +83,15 @@ export class OutboundWorker {
     });
     if (!claimed) return;
     let accepted = null;
+    let reservationKey = null;
+    let dispatchMessage = null;
     try {
       const [message, account] = await Promise.all([
         this.store.get(COLLECTIONS.messages, claimed.messageId),
         this.channelAccounts.get(claimed.orgId, claimed.channelAccountId)
       ]);
       if (!message) throw permanentError("Outbound message no longer exists", "MESSAGE_NOT_FOUND");
+      dispatchMessage = message;
       if (account.status !== "ACTIVE" || account.sendEnabled !== true) throw permanentError("Channel account is disabled", "ACCOUNT_DISABLED");
       const attachments = await this.media.prepareForSend(claimed.orgId, message.attachmentIds || []);
       const templateHeader = message.type === "TEMPLATE" ? message.metadata?.templateHeader : null;
@@ -111,6 +114,7 @@ export class OutboundWorker {
       }
       if (templateHeader?.type) attachTemplateHeader(message, attachments[0], templateHeader);
       await this.assertSendAllowed(message);
+      reservationKey = await this.marketingSafety?.reserve(message);
       let result;
       try {
         result = await this.channelManager.send({ account, message, attachments });
@@ -135,16 +139,22 @@ export class OutboundWorker {
           });
         }
         if (templateHeader?.type) attachTemplateHeader(message, attachments[0], templateHeader);
+        await this.marketingSafety?.reserve(message, true);
         result = await this.channelManager.send({ account, message, attachments });
       }
       accepted = result;
+      if (!result?.providerMessageId) { const error = permanentError('Provider acceptance is unknown', 'DELIVERY_UNKNOWN'); throw error; }
+      await this.marketingSafety?.settle(reservationKey, message, 'accepted');
       const decisionAudits = await this.store.find(COLLECTIONS.messageAuditLogs, {
         filters: [["messageId", "==", message.messageId]],
         limit: 5
       });
       await this.store.runTransaction(async (tx) => {
+        const latest = await tx.get(COLLECTIONS.messages, message.messageId);
+        await this.onAccepted?.(message, tx);
         tx.update(COLLECTIONS.messages, message.messageId, {
-          status: "SENT",
+          status: ['DELIVERED', 'READ'].includes(latest?.status) ? latest.status : "SENT",
+          submissionState: 'accepted',
           providerMessageId: result.providerMessageId,
           errorCode: null,
           errorMessage: null,
@@ -175,18 +185,34 @@ export class OutboundWorker {
           });
         }
       });
+      await this.reconcileProviderStatus?.(message.orgId, result.providerMessageId);
       if (message.metadata?.campaignId && this.campaignDelayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, this.campaignDelayMs));
       }
     } catch (error) {
       if (accepted?.providerMessageId) {
-        await this.store.update(COLLECTIONS.messages, claimed.messageId, { status: 'SENT', providerMessageId: accepted.providerMessageId, updatedAt: now() });
+        await this.store.runTransaction(async tx => {
+          const latest = await tx.get(COLLECTIONS.messages, claimed.messageId);
+          await this.onAccepted?.(dispatchMessage, tx);
+          tx.update(COLLECTIONS.messages, claimed.messageId, { status: ['DELIVERED', 'READ'].includes(latest?.status) ? latest.status : 'SENT', submissionState: 'accepted', providerMessageId: accepted.providerMessageId, updatedAt: now() });
+        });
         await this.store.update(COLLECTIONS.outbox, id, { status: 'SENT', lockedAt: null, lockedBy: null, updatedAt: now() });
+        await this.reconcileProviderStatus?.(claimed.orgId, accepted.providerMessageId);
         return;
       }
-      if (['ETIMEDOUT','ECONNRESET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT'].includes(String(error.code)) || /timeout|timed out/i.test(error.name || '')) {
+      if (reservationKey) await this.marketingSafety?.providerFailure(dispatchMessage, error);
+      if ([408, 504].includes(error.status) || ['META_TIMEOUT','META_NETWORK_UNKNOWN','TIMEOUT','DELIVERY_UNKNOWN','ETIMEDOUT','ECONNRESET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT'].includes(String(error.code)) || /timeout|timed out/i.test(error.name || '')) {
+        await this.marketingSafety?.settle(reservationKey, dispatchMessage, 'submission_unknown');
         await this.store.update(COLLECTIONS.messages, claimed.messageId, { status: 'DELIVERY_UNKNOWN', errorCode: 'DELIVERY_UNKNOWN', errorMessage: 'Provider connection ended without a delivery result. Check before sending again.', updatedAt: now() });
         await this.store.update(COLLECTIONS.outbox, id, { status: 'DELIVERY_UNKNOWN', lockedAt: null, lockedBy: null, updatedAt: now() });
+        return;
+      }
+      await this.marketingSafety?.settle(reservationKey, dispatchMessage, 'rejected');
+      if (['MARKETING_PAUSED', 'CAMPAIGN_PAUSED', 'QUIET_HOURS', 'ENROLLMENT_NOT_READY'].includes(error.code)) {
+        await this.store.runTransaction(async tx => {
+          tx.update(COLLECTIONS.outbox, id, { status: 'PENDING', attemptCount: Math.max(0, claimed.attemptCount - 1), nextAttemptAt: new Date(Date.now() + (error.code === 'ENROLLMENT_NOT_READY' ? 1000 : 15 * 60_000)), lockedAt: null, lockedBy: null, lastError: { code: error.code }, updatedAt: now() });
+          tx.update(COLLECTIONS.messages, claimed.messageId, { status: 'QUEUED', errorCode: error.code, errorMessage: 'Held until marketing resumes or business hours reopen', updatedAt: now() });
+        });
         return;
       }
       await this.failOrRetry(claimed, error);
@@ -199,13 +225,14 @@ export class OutboundWorker {
       this.store.get(COLLECTIONS.conversations, message.conversationId)
     ]);
     if (!contact || contact.orgId !== message.orgId || !conversation || conversation.orgId !== message.orgId) throw permanentError('Client or conversation is unavailable', 'CONTACT_UNAVAILABLE');
-    if (contact.suppressed || contact.status === 'BLOCKED' || contact.marketingOptOut || contact.marketingConsent?.status === 'OPTED_OUT') throw permanentError('Client has stopped messages', 'CONTACT_SUPPRESSED');
+    if (!this.marketingSafety && (contact.suppressed || contact.status === 'BLOCKED' || contact.marketingOptOut || contact.marketingConsent?.status === 'OPTED_OUT')) throw permanentError('Client has stopped messages', 'CONTACT_SUPPRESSED');
     if (message.channel === 'WHATSAPP' && message.type !== 'TEMPLATE' && !customerServiceWindow(conversation.lastInboundAt).open) throw permanentError('Reply window closed before this message could send', 'SERVICE_WINDOW_CLOSED');
     if (message.metadata?.campaignId) {
       const campaign = await this.store.get(COLLECTIONS.marketingCampaigns, message.metadata.campaignId);
       const enrollment = message.metadata.campaignEnrollmentId ? await this.store.get(COLLECTIONS.campaignEnrollments, message.metadata.campaignEnrollmentId) : null;
-      if (!campaign || !['RUNNING', 'ACTIVE', 'COMPLETED'].includes(campaign.status)) throw permanentError('Campaign is paused or stopped', 'CAMPAIGN_STOPPED');
-      if (enrollment && ['PAUSED', 'STOPPED', 'CANCELLED', 'OPTED_OUT', 'REPLIED', 'PAUSED_REPLIED', 'FAILED', 'SKIPPED'].includes(enrollment.status)) throw permanentError('Client sequence is paused or stopped', 'SEQUENCE_STOPPED');
+      if (campaign?.status === 'PAUSED' && this.marketingSafety) throw permanentError('Campaign paused', 'CAMPAIGN_PAUSED');
+      if (!campaign || !['RUNNING', 'ACTIVE', 'UPGRADE_RUNNING', 'COMPLETED'].includes(campaign.status)) throw permanentError('Campaign is paused or stopped', 'CAMPAIGN_STOPPED');
+      if (enrollment && ['PAUSED', 'STOPPED', 'CANCELLED', 'OPTED_OUT', 'REPLIED', 'PAUSED_REPLIED', 'CONVERTED', 'EXCLUDED', 'FAILED', 'SKIPPED'].includes(enrollment.status)) throw permanentError('Client sequence is paused or stopped', 'SEQUENCE_STOPPED');
       if (conversation.humanTakeover) throw permanentError('An agent has taken over this conversation', 'HUMAN_TAKEOVER');
     }
   }

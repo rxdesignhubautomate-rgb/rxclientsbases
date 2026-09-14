@@ -4,6 +4,8 @@ import { now, toDate } from "../utils/dates.js";
 import { normalizePhone } from "../utils/phone.js";
 import { ConflictError, NotFoundError } from "../utils/errors.js";
 import { customerServiceWindow } from "./conversation.service.js";
+import { qualifyingOrder } from "./client-classification.js";
+import { stopIntent, assertPermission } from './marketing-safety.service.js';
 import {
   canAccessRelationship,
   CLIENT_SCOPES,
@@ -12,14 +14,14 @@ import {
   resolveClientScope
 } from "../utils/client-scope.js";
 
-const ACTIVE_ENROLLMENT_STATUSES = new Set(["ACTIVE", "PROCESSING", "WAITING_FOR_WINDOW", "PAUSED", "PAUSED_REPLIED", "COMPLETED"]);
+const ACTIVE_ENROLLMENT_STATUSES = new Set(["ACTIVE", "PROCESSING", "WAITING_FOR_WINDOW", "PAUSED", "PAUSED_REPLIED", "COMPLETED", "SNAPSHOT_READY", "QUEUED"]);
 const RUNNING_CAMPAIGN_STATUSES = new Set(["ACTIVE", "RUNNING"]);
 const OPT_OUT_PHRASES = Object.freeze(["STOP", "UNSUBSCRIBE", "CANCEL", "END", "QUIT", "NOT INTERESTED", "NO MORE MESSAGES", "BAND KARO", "MESSAGE MAT KARO"]);
 const OPT_IN_PHRASES = new Set(["START", "YES", "INTERESTED", "SEND DETAILS", "SEND SAMPLE", "PRICE BHEJO"]);
 const MAX_AUDIENCE_SIZE = 10000;
 const MAX_RECIPIENTS_PER_BATCH = 500;
-// Daily marketing send: 220 keeps a safety buffer under the 250/day (Tier 0)
-// WhatsApp messaging limit so no message in a batch is rejected for cap overflow.
+// Legacy business batch preference. This is not a current provider-account limit
+// and cannot guarantee acceptance; the reviewed workspace has its own 500 maximum.
 const DAILY_MARKETING_BATCH_SIZE = 220;
 const MAX_SEGMENT_CONTACTS = 50000;
 const TEMPERATURE_RANK = Object.freeze({ HOT: 3, WARM: 2, COLD: 1 });
@@ -156,6 +158,14 @@ export class MarketingService {
   }
 
   async findContactCampaignContext(orgId, contactId) {
+    if (this.safety) {
+      const messages = await this.store.find(COLLECTIONS.messages, {
+        filters: [['orgId', '==', orgId], ['contactId', '==', contactId], ['direction', '==', 'OUTBOUND']],
+        orderBy: ['createdAt', 'desc'], limit: 100
+      });
+      const sent = messages.items.find(m => m.metadata?.campaignId && (m.submissionState === 'accepted' || ['SENT', 'DELIVERED', 'READ'].includes(m.status)));
+      return sent ? { ...sent.metadata, createdAt: sent.createdAt, queuedAt: sent.createdAt, lastMessageId: sent.messageId } : null;
+    }
     const result = await this.store.find(COLLECTIONS.campaignEnrollments, {
       filters: [["contactId", "==", contactId]],
       limit: MAX_AUDIENCE_SIZE
@@ -164,6 +174,15 @@ export class MarketingService {
   }
 
   async recordConsent(orgId, contactId, input, actor = {}) {
+    if (this.safety) {
+      if (input.status === 'OPTED_IN') throw new ConflictError('Record purpose-specific evidence in the permission review before granting marketing consent');
+      if (!actor.userId) throw new ConflictError('System opt-outs must use the verified inbound event path');
+      assertPermission({ ...actor, orgId }, 'marketing.consent');
+      const contact = await this.contacts.get(orgId, contactId);
+      await this.safety.directory.checkedContact({ ...actor, orgId }, contactId);
+      await this.safety.suppressInbound(orgId, contactId, { messageId: `staff-${createId('auditLog')}`, senderId: contact.primaryPhone });
+      return this.contacts.get(orgId, contactId);
+    }
     const contact = await this.contacts.get(orgId, contactId);
     const timestamp = now();
     const consent = {
@@ -503,12 +522,13 @@ export class MarketingService {
       limit: options.limit || 100,
       cursor: options.cursor
     });
-    const items = this.filterForActor(result.items, options.actor);
+    const items = this.filterForActor(result.items.filter(item => !item.crmUpgrade), options.actor);
     return { ...result, items: sortRecent(items) };
   }
 
   async getAudience(orgId, audienceId, { includeContacts = true, actor = {} } = {}) {
     const audience = await this.store.get(COLLECTIONS.marketingAudiences, audienceId);
+    if (audience?.crmUpgrade) throw new ConflictError('Open this audience in the reviewed marketing workspace');
     if (!audience || audience.orgId !== orgId) throw new NotFoundError("Marketing audience");
     this.assertActorRelationship(actor, audience.relationshipType || "MIXED");
     if (!includeContacts) return audience;
@@ -582,13 +602,14 @@ export class MarketingService {
       limit: options.limit || 100,
       cursor: options.cursor
     });
-    let items = this.filterForActor(result.items, options.actor);
+    let items = this.filterForActor(result.items.filter(item => !item.crmUpgrade), options.actor);
     if (options.status) items = items.filter((item) => item.status === options.status);
     return { ...result, items: sortRecent(items) };
   }
 
   async getCampaign(orgId, campaignId, { includeEnrollments = false, actor = {} } = {}) {
     const campaign = await this.store.get(COLLECTIONS.marketingCampaigns, campaignId);
+    if (campaign?.crmUpgrade) throw new ConflictError('Use the reviewed campaign workflow for this campaign');
     if (!campaign || campaign.orgId !== orgId) throw new NotFoundError("Marketing campaign");
     this.assertActorRelationship(actor, campaign.relationshipType || "MIXED");
     if (!includeEnrollments) return campaign;
@@ -803,6 +824,8 @@ export class MarketingService {
   }
 
   async processDue(limit = 20) {
+    if (this.workspace) await this.workspace.processDue(limit);
+    else await this.clientDirectory?.processClassificationJobs();
     await this.startScheduledCampaigns();
     const due = await this.store.find(COLLECTIONS.campaignEnrollments, {
       filters: [["nextRunAt", "<=", now()]],
@@ -951,6 +974,31 @@ export class MarketingService {
   }
 
   async handleInbound({ orgId, contactId, message }) {
+    if (this.safety) {
+      await this.workspace?.stopTaskSequences(orgId, contactId, 'Client replied; review the next action');
+      const stop = stopIntent(message?.text);
+      if (stop === 'review') await this.safety.holdForReview(orgId, contactId, message);
+      if (stop && stop !== 'review') {
+        await this.safety.suppressInbound(orgId, contactId, message, stop);
+        await this.stopContactEnrollments(orgId, contactId, 'OPTED_OUT');
+        return { optedOut: true, campaignReply: false };
+      }
+      const quoted = message.replyToMessageId ? await this.store.get(COLLECTIONS.messages, message.replyToMessageId) : null;
+      const exact = quoted?.orgId === orgId && quoted.contactId === contactId && quoted.metadata?.campaignId ? quoted.metadata : null;
+      const recent = exact ? null : await this.findContactCampaignContext(orgId, contactId);
+      const context = exact || (recent && toDate(recent.queuedAt || recent.createdAt)?.getTime() >= Date.now() - 7 * 86400000 ? recent : null);
+      if (context) await this.stopContactEnrollments(orgId, contactId, 'PAUSED_REPLIED', { replyMessageId: message.messageId, needsReview: true });
+      if (context || stop === 'review') {
+        const contact = await this.store.get(COLLECTIONS.contacts, contactId);
+        await this.store.runTransaction(async tx => {
+          if (await tx.get('marketingReplyReceipts', message.messageId)) return;
+          tx.create('marketingReplyReceipts', message.messageId, { orgId, contactId, assignedTo: contact?.assignedTo || null, campaignId: context?.campaignId || null, messageId: message.messageId, attribution: context ? exact ? 'explicit_reply' : 'inferred_7_days' : 'unattributed', outcome: 'NEEDS_REVIEW', createdAt: now() });
+        });
+      }
+      if (context) await this.store.set('marketingReplyContacts', `${context.campaignId}-${contactId}`, { orgId, contactId, campaignId: context.campaignId, lastReplyId: message.messageId, attribution: exact ? 'explicit_reply' : 'inferred_7_days', updatedAt: now() });
+      if (context) await this.store.update(COLLECTIONS.contacts, contactId, { crmHasMarketingReply: true });
+      return { optedOut: false, optedIn: false, campaignReply: Boolean(context), needsReview: stop === 'review' || Boolean(context), attribution: exact ? 'explicit_reply' : 'inferred_7_days', campaignId: context?.campaignId || null };
+    }
     const text = normalizeConsentText(message?.text);
     if (isOptOutText(text)) {
       await this.recordConsent(orgId, contactId, { status: "OPTED_OUT", source: "WHATSAPP_REPLY", note: `Customer replied ${text}` });
@@ -1014,6 +1062,10 @@ export class MarketingService {
   }
 
   async attributeOrder(orgId, contactId, orderId) {
+    const order = await this.store.get(COLLECTIONS.orders, orderId);
+    if (!order || order.orgId !== orgId || order.contactId !== contactId || !qualifyingOrder(order)) return { convertedCampaigns: 0, ignored: true };
+    await this.clientDirectory?.recordQualifyingOrder(orgId, orderId);
+    await this.workspace?.stopTaskSequences(orgId, contactId, 'Qualifying order received; use the order workflow');
     const changed = await this.stopContactEnrollments(orgId, contactId, "CONVERTED", { orderId, convertedAt: now() });
     const owner = await this.segmentOwner(orgId, "EXISTING_CLIENT");
     const timestamp = now();

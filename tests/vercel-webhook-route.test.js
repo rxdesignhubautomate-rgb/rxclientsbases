@@ -8,6 +8,17 @@ import { waitUntil } from "@vercel/functions";
 import { webhooksRoutes } from "../src/routes/webhooks.routes.js";
 
 describe("Vercel webhook background processing", () => {
+  it("wakes the persistent worker only after durable receipt on Render", async () => {
+    const wake = vi.fn();
+    const container = { env: { WORKERS_ENABLED: true }, webhook: { receiveWhatsApp: vi.fn().mockResolvedValue({ duplicate: false, webhookEventId: 'event' }) }, workers: { inbound: { wake } } };
+    const app = express(); app.use(express.json()); app.use(webhooksRoutes(container));
+    expect((await request(app).post('/whatsapp').send({})).status).toBe(200);
+    expect(wake).toHaveBeenCalledOnce();
+    expect(waitUntil).not.toHaveBeenCalled();
+    container.webhook.receiveWhatsApp.mockRejectedValueOnce(new Error('storage failed'));
+    expect((await request(app).post('/whatsapp').send({})).status).toBe(500);
+    expect(wake).toHaveBeenCalledOnce();
+  });
   afterEach(() => {
     delete process.env.VERCEL;
     vi.clearAllMocks();

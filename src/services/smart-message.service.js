@@ -300,6 +300,7 @@ export class SmartMessageService {
   }
 
   async recordMarketingQueued(context, templateKey, current = new Date()) {
+    if (this.marketingSafety) return; // The worker records provider acceptance, not queuing, as last marketing activity.
     const contact = context.contact;
     const timestamp = toDate(current) || now();
     const history = [...(contact.marketingSendHistory || []).map(toDate).filter(Boolean), timestamp]

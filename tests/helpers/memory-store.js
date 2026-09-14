@@ -1,4 +1,5 @@
 import { encodeCursor } from "../../src/utils/pagination.js";
+import { matchesWhere } from '../../src/services/audience-filter.js';
 
 export class MemoryStore {
   constructor(seed = {}) {
@@ -43,10 +44,10 @@ export class MemoryStore {
 
   async find(collection, { filters = [], orderBy, limit = 25, cursor, search, searchFields = [] } = {}) {
     let values = [...this.bucket(collection)].map(([id, value]) => ({ id, ...clone(value) }));
-    values = values.filter((item) => filters.every(([field, op, expected]) => compare(item[field], op, expected)));
+    values = values.filter((item) => filters.every(([field, op, expected]) => compare(fieldValue(item, field), op, expected)));
     if (orderBy?.[0]) {
       const [field, direction] = orderBy;
-      values.sort((a, b) => compareSort(a[field], b[field]) * (direction === "desc" ? -1 : 1));
+      values.sort((a, b) => compareSort(fieldValue(a, field), fieldValue(b, field)) * (direction === "desc" ? -1 : 1));
     }
     if (cursor) {
       const index = values.findIndex((item) => item.id === cursor);
@@ -62,11 +63,31 @@ export class MemoryStore {
 
   async count(collection, { filters = [] } = {}) {
     return [...this.bucket(collection).values()]
-      .filter((item) => filters.every(([field, op, expected]) => compare(item[field], op, expected)))
+      .filter((item) => filters.every(([field, op, expected]) => compare(fieldValue(item, field), op, expected)))
       .length;
   }
 
+  async findWhere(collection, { where, limit = 50, cursor, orderBy } = {}) {
+    const orderFields = [...new Set(rangeFields(where))].sort();
+    let values = [...this.bucket(collection)].map(([id, value]) => ({ id, ...clone(value) })).filter(row => matchesWhere(row, where)).sort((a, b) => {
+      if (!orderFields.length && orderBy) { const result = compareSort(fieldValue(a, orderBy[0]), fieldValue(b, orderBy[0])); if (result) return result * (orderBy[1] === 'desc' ? -1 : 1); }
+      for (const field of orderFields) { const result = compareSort(fieldValue(a, field), fieldValue(b, field)); if (result) return result; }
+      return a.id.localeCompare(b.id) * (!orderFields.length && orderBy?.[1] === 'desc' ? -1 : 1);
+    });
+    if (cursor) { const at = values.findIndex(v => v.id === cursor); if (at >= 0) values = values.slice(at + 1); }
+    const items = values.slice(0, limit);
+    return { items, pagination: { hasMore: values.length > limit, nextCursor: values.length > limit ? encodeCursor(items.at(-1).id) : null } };
+  }
+  async countWhere(collection, where) {
+    return [...this.bucket(collection)].filter(([id, value]) => matchesWhere({ id, ...value }, where)).length;
+  }
+
   async runTransaction(callback) {
+    const before = this.transactionTail || Promise.resolve();
+    let release;
+    this.transactionTail = new Promise(resolve => { release = resolve; });
+    await before;
+    try {
     const snapshot = new Map([...this.collections].map(([name, bucket]) => [name, new Map([...bucket].map(([id, value]) => [id, clone(value)]))]));
     const txStore = new MemoryStore();
     txStore.collections = snapshot;
@@ -78,6 +99,7 @@ export class MemoryStore {
     });
     this.collections = txStore.collections;
     return result;
+    } finally { release(); }
   }
 
   async batchUpdate(collection, items) {
@@ -119,3 +141,7 @@ function compareSort(a, b) {
 function clone(value) {
   return structuredClone(value);
 }
+
+function fieldValue(item, field) { return field === '__name__' ? item.id : field.split('.').reduce((v, key) => v?.[key], item); }
+
+function rangeFields(node) { return node.and || node.or ? (node.and || node.or).flatMap(rangeFields) : ['>', '>=', '<', '<='].includes(node.op) ? [node.field] : []; }

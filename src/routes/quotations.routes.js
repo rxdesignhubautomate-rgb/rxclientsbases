@@ -10,6 +10,7 @@ export function quotationsRoutes(controller) {
   router.get("/:quotationId", authorizePermission("quotations.read"), controller.get);
   router.patch("/:quotationId", authorizePermission("quotations.update"), validate(quotationSchema.partial()), controller.update);
   router.post("/:quotationId/generate-pdf", authorizePermission("quotations.update"), controller.generatePdf);
+  router.post("/:quotationId/pdf", authorizePermission("quotations.update"), controller.attachPdf);
   router.post("/:quotationId/send", authorizePermission("quotations.send"), controller.send);
   router.post("/:quotationId/accept", authorizePermission("quotations.update"), controller.accept);
   router.post("/:quotationId/reject", authorizePermission("quotations.update"), controller.reject);
