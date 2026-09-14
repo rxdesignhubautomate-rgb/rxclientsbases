@@ -90,6 +90,9 @@ export function messagePolicyRoutes(container) {
   router.post("/campaigns/:campaignId/cancel", wrap(async (req, res) => {
     return sendData(res, await container.marketing.cancelCampaign(req.auth.orgId, req.params.campaignId, req.auth));
   }));
+  router.post("/campaigns/:campaignId/retry-failed", wrap(async (req, res) => {
+    return sendData(res, await container.marketing.retryFailedOutbox(req.auth.orgId, req.params.campaignId, req.auth));
+  }));
   router.post("/workers/campaign/run", authorizeRole("OWNER", "ADMIN"), wrap(async (_req, res) => {
     return sendData(res, { processed: await container.marketing.processDue(container.env.CAMPAIGN_BATCH_SIZE) });
   }));
