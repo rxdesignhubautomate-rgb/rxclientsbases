@@ -597,6 +597,21 @@ export class CrmMarketingWorkspaceService {
     return this.store.find(collection, { filters: [['orgId', '==', actor.orgId], ['contactId', '==', contactId]], orderBy: ['createdAt', 'desc'], cursor, limit: q.limit });
   }
 
+  // Read-only lookup so an admin can jump straight to the handful of messages
+  // history-preparation is holding for review, instead of hunting through every
+  // campaign's recipient list. Never mutates anything.
+  async unresolvedMessages(actor) {
+    assertPermission(actor, 'marketing.reconcile');
+    const page = await this.store.find('messages', { filters: [['orgId', '==', actor.orgId], ['status', '==', 'DELIVERY_UNKNOWN']], orderBy: ['createdAt', 'desc'], limit: 50 });
+    const contacts = new Map((await this.store.getMany('contacts', page.items.map(m => m.contactId))).map(c => [c.contactId || c.id, c]));
+    return { items: page.items.flatMap(m => {
+      const contact = contacts.get(m.contactId);
+      try { if (contact) this.directory.assertRecordScope(actor, contact); } catch { return []; }
+      return [{ messageId: m.messageId || m.id, contactId: m.contactId, campaignId: m.metadata?.campaignId || null,
+        companyName: contact?.companyName || contact?.contactPerson || m.contactId,
+        destination: canonicalDestination(m.recipientId) || m.recipientId, createdAt: m.createdAt }];
+    }) };
+  }
   async replies(actor, raw = {}) {
     assertPermission(actor, 'marketing.read');
     const q = queryInput.parse(raw), cursor = decodeCursor(q.cursor);
