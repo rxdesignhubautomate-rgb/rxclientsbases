@@ -2,7 +2,7 @@ import { canonicalDestination, destinationKey } from '../services/marketing-safe
 import { decodeCursor } from '../utils/pagination.js';
 import { timestampMs } from '../services/client-classification.js';
 
-// Reusable only through the guarded emulator command. Never grants permission.
+// Used by the emulator command and authenticated admin preparation. Never grants permission.
 export async function backfillMarketingSuppressionPage(store, { orgId, cursor, limit = 100, commit = false } = {}) {
   if (!orgId || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Provide business and bounded page size');
   const decoded = decodeCursor(cursor);
@@ -17,7 +17,7 @@ export async function backfillMarketingSuppressionPage(store, { orgId, cursor, l
       const e164 = canonicalDestination(contact.primaryPhone, contact.phoneCountryCode);
       if (!e164) { if (commit) tx.update('contacts', contact.contactId || item.id, { crmV1SuppressionPrepared: true, crmV1NeedsReview: true }); return 'phoneReview'; }
       const key = destinationKey(orgId, e164), state = await tx.get('marketingDestinationState', key), permission = await tx.get('marketingPermissions', key);
-      const legacyStop = contact.marketingOptOut || contact.marketingConsent?.status === 'OPTED_OUT' || contact.optInStatus === 'OPTED_OUT' || contact.doNotMarket || contact.stopAllCommunications || contact.status === 'BLOCKED';
+      const legacyStop = contact.suppressed || contact.marketingOptOut || contact.marketingConsent?.status === 'OPTED_OUT' || contact.optInStatus === 'OPTED_OUT' || contact.doNotMarket || contact.stopAllCommunications || contact.status === 'BLOCKED';
       const stopAt = timestampMs(contact.marketingConsent?.optedOutAt || contact.marketingConsent?.recordedAt || contact.marketingOptOutAt);
       const reviewedRestore = permission?.state === 'granted' && permission.restoresOptOut && stopAt !== null && timestampMs(permission.obtainedAt) > stopAt;
       if (commit) {

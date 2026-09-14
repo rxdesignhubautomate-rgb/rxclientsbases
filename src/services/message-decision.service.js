@@ -1,3 +1,4 @@
+import { businessOptedIn } from './business-opt-in-policy.js';
 import { getWhatsAppTemplate, getWhatsAppTemplateRegistry } from "../config/whatsapp-templates.js";
 import { toDate } from "../utils/dates.js";
 import { normalizePhone } from "../utils/phone.js";
@@ -97,7 +98,7 @@ function requiredValue(input, field) {
 }
 
 function marketingOptedIn(lead) {
-  return lead.marketingOptIn === true || lead.marketingConsent?.status === "OPTED_IN";
+  return businessOptedIn(lead);
 }
 
 function utilityTemplateKey(templateKey, eventType) {

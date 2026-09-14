@@ -26,9 +26,9 @@ const evidence = (overrides = {}) => ({ state: 'granted', source: 'SIGNED_FORM',
 const message = (id = 'M1', contactId = 'C1') => ({ messageId: id, orgId: 'DEMO', contactId, recipientId: phone, senderId: 'U1', type: 'TEMPLATE', metadata: { marketingPurpose: true, template: { name: 'design_update', language: { code: 'en' } } } });
 
 describe('destination marketing safety', () => {
-  it('requires evidence rather than importing legacy opt-in', async () => {
+  it('honors owner-confirmed opt-in while validating separately recorded evidence', async () => {
     const { safety, contact } = setup();
-    expect((await safety.inspect('DEMO', { ...contact, marketingOptIn: true, marketingConsent: { status: 'OPTED_IN' } })).eligible).toBe(false);
+    expect((await safety.inspect('DEMO', { ...contact, marketingOptIn: true, marketingConsent: { status: 'OPTED_IN' } })).eligible).toBe(true);
     await expect(safety.record(actor, 'C1', evidence({ evidenceReference: '' }))).rejects.toThrow();
     await safety.record(actor, 'C1', evidence());
     expect((await safety.inspect('DEMO', contact)).eligible).toBe(true);

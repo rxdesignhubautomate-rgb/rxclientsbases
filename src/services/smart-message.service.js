@@ -1,3 +1,4 @@
+import { businessOptedIn } from './business-opt-in-policy.js';
 import { assertInboxAccess } from "./inbox-access.js";
 import { COLLECTIONS } from "../config/constants.js";
 import { getWhatsAppTemplate } from "../config/whatsapp-templates.js";
@@ -167,7 +168,10 @@ export class SmartMessageService {
       status: contact.status,
       suppressed: contact.suppressed === true || contact.status === "BLOCKED",
       marketingConsent: contact.marketingConsent || null,
-      marketingOptIn: contact.marketingOptIn === true || contact.marketingConsent?.status === "OPTED_IN",
+      marketingOptIn: businessOptedIn(contact),
+      optInStatus: contact.optInStatus,
+      doNotMarket: contact.doNotMarket === true,
+      stopAllCommunications: contact.stopAllCommunications === true,
       marketingOptOut: contact.marketingOptOut === true || contact.marketingConsent?.status === "OPTED_OUT",
       lastUserMessageAt: conversation?.lastInboundAt || lead?.lastUserMessageAt || contact.lastUserMessageAt || null,
       serviceWindowExpiresAt: conversation ? null : (lead?.serviceWindowExpiresAt || contact.serviceWindowExpiresAt || null),

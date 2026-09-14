@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { businessOptedIn } from './business-opt-in-policy.js';
 import { sha256 } from '../utils/hashing.js';
 import { ConflictError, ForbiddenError } from '../utils/errors.js';
 import { activityOf, inspectDestination, timestampMs } from './client-classification.js';
@@ -101,8 +102,8 @@ export class MarketingSafetyService {
     const companies = await this.store.getMany('contacts', contact.crmCompanyIds || []);
     const blockedCompany = companies.some(c => c.orgId !== orgId || c.doNotMarket || c.stopAllCommunications || c.status === 'BLOCKED') || companies.length !== (contact.crmCompanyIds || []).length;
     const reason = this.permissionReason(contact, permission, state, blockedCompany);
-    return { e164, destinationKey: key, state: state?.marketingSuppressed || state?.stopAll ? 'suppressed' : permission?.state || 'unknown', version: permission?.version || 0,
-      source: permission?.source || null, obtainedAt: permission?.obtainedAt || null, eligible: !reason, reason, lastAcceptedAt: state?.lastAcceptedAt || null };
+    return { e164, destinationKey: key, state: state?.marketingSuppressed || state?.stopAll ? 'suppressed' : permission?.state || (!reason ? 'granted' : 'unknown'), version: permission?.version || 0,
+      source: permission?.source || (!reason ? 'BUSINESS_OPT_IN_POLICY' : null), obtainedAt: permission?.obtainedAt || null, eligible: !reason, reason, lastAcceptedAt: state?.lastAcceptedAt || null };
   }
 
   async inspectMany(orgId, contacts) {
@@ -120,15 +121,17 @@ export class MarketingSafetyService {
       const key = destinationKey(orgId, e164), permission = permissionMap.get(key), state = stateMap.get(key);
       const companyBlocked = (contact.crmCompanyIds || []).some(id => { const c = companyMap.get(id); return !c || c.orgId !== orgId || c.doNotMarket || c.stopAllCommunications || c.status === 'BLOCKED'; });
       const reason = this.permissionReason(contact, permission, state, companyBlocked);
-      return { e164, destinationKey: key, state: state?.reviewRequired ? 'needs_review' : state?.marketingSuppressed || state?.stopAll ? 'suppressed' : permission?.state || 'unknown', version: permission?.version || 0, eligible: !reason, reason, source: permission?.source || null, obtainedAt: permission?.obtainedAt || null, lastAcceptedAt: state?.lastAcceptedAt || null };
+      return { e164, destinationKey: key, state: state?.reviewRequired ? 'needs_review' : state?.marketingSuppressed || state?.stopAll ? 'suppressed' : permission?.state || (!reason ? 'granted' : 'unknown'), version: permission?.version || 0, eligible: !reason, reason, source: permission?.source || (!reason ? 'BUSINESS_OPT_IN_POLICY' : null), obtainedAt: permission?.obtainedAt || null, lastAcceptedAt: state?.lastAcceptedAt || null };
     });
   }
 
   permissionReason(contact, permission, state, companyBlocked = false) {
     if (state?.reviewRequired) return 'RECIPIENT_REQUEST_NEEDS_REVIEW';
-    if (contact.doNotMarket || contact.stopAllCommunications || contact.status === 'BLOCKED' || companyBlocked || state?.stopAll || state?.marketingSuppressed) return 'SUPPRESSED';
+    if (contact.suppressed || contact.doNotMarket || contact.stopAllCommunications || contact.status === 'BLOCKED' || companyBlocked || state?.stopAll || state?.marketingSuppressed) return 'SUPPRESSED';
     const legacyStop = contact.marketingOptOut || contact.marketingConsent?.status === 'OPTED_OUT' || contact.optInStatus === 'OPTED_OUT';
     if (legacyStop && !permission?.restoresOptOut) return 'LEGACY_OPT_OUT_REQUIRES_FRESH_EVIDENCE';
+    if (permission?.state === 'revoked') return 'SUPPRESSED';
+    if (!permission && businessOptedIn(contact)) return null;
     if (permission?.orgId !== contact.orgId || permission?.state !== 'granted' || permission.purpose !== 'marketing' || permission.channel !== 'WHATSAPP' || !permission.evidenceReference) return 'PERMISSION_UNKNOWN';
     if ((timestampMs(permission.obtainedAt) ?? Infinity) > this.clock()) return 'INVALID_PERMISSION_DATE';
     return null;

@@ -1,0 +1,122 @@
+
+ RUN  v3.2.7 C:/Users/SHUBHAM KUMAR/Documents/Codex/2026-09-14/how/work/sending-fix/backend/rxclientsbases-main
+
+····························x·····················xx··········{"level":40,"time":1789391582930,"service":"rx-communication-crm","version":"2.18.0-dev.3","method":"POST","path":"/events/order-confirmed/batch","status":400,"code":"VALIDATION_ERROR","userId":"USR_OWNER","orgId":"RXDH","error":"Invalid request","msg":"request_rejected"}
+·················································{"level":40,"time":1789391583727,"service":"rx-communication-crm","version":"2.18.0-dev.3","requestId":"test-request","method":"GET","path":"/private","status":401,"code":"UNAUTHENTICATED","error":"Authentication required","msg":"request_rejected"}
+{"level":40,"time":1789391583755,"service":"rx-communication-crm","version":"2.18.0-dev.3","requestId":"test-request","method":"GET","path":"/private","status":403,"code":"FORBIDDEN","error":"User is disabled or not provisioned","msg":"request_rejected"}
+{"level":40,"time":1789391583761,"service":"rx-communication-crm","version":"2.18.0-dev.3","requestId":"test-request","method":"GET","path":"/private","status":403,"code":"FORBIDDEN","error":"Organization claim mismatch","msg":"request_rejected"}
+{"level":40,"time":1789391583772,"service":"rx-communication-crm","version":"2.18.0-dev.3","requestId":"test-request","method":"GET","path":"/admin","status":403,"code":"FORBIDDEN","userId":"USR_SALES","orgId":"RXDH","error":"Access denied","msg":"request_rejected"}
+··········{"level":40,"time":1789391584108,"service":"rx-communication-crm","version":"2.18.0-dev.3","method":"POST","path":"/process-orders","status":401,"code":"INTEGRATION_UNAUTHORIZED","error":"Invalid integration credentials","msg":"request_rejected"}
+··································································································x··································{"level":30,"time":1789391586237,"service":"rx-communication-crm","version":"2.18.0-dev.3","req":{"id":"785cf15f-1862-41d3-a595-2432b9cffc0c","method":"GET","url":"/health"},"res":{"statusCode":200},"responseTime":6,"msg":"request completed"}
+{"level":30,"time":1789391586244,"service":"rx-communication-crm","version":"2.18.0-dev.3","req":{"id":"e110e611-f870-45be-add2-b4c94862ed07","method":"GET","url":"/health"},"res":{"statusCode":200},"responseTime":1,"msg":"request completed"}
+{"level":30,"time":1789391586248,"service":"rx-communication-crm","version":"2.18.0-dev.3","req":{"id":"df0d45f0-9aba-41ac-8ae7-35ee2bddd61b","method":"GET","url":"/health"},"res":{"statusCode":200},"responseTime":0,"msg":"request completed"}
+{"level":30,"time":1789391586251,"service":"rx-communication-crm","version":"2.18.0-dev.3","req":{"id":"d7d70009-56fb-4d0a-ba08-c4344adeed9f","method":"GET","url":"/ready"},"res":{"statusCode":200},"responseTime":0,"msg":"request completed"}
+{"level":30,"time":1789391586259,"service":"rx-communication-crm","version":"2.18.0-dev.3","req":{"id":"fdcb5db2-cb55-4b4a-9cec-12124405dadb","method":"GET","url":"/health"},"res":{"statusCode":200},"responseTime":1,"msg":"request completed"}
+{"level":30,"time":1789391586262,"service":"rx-communication-crm","version":"2.18.0-dev.3","req":{"id":"078b110e-a127-4953-bbe0-163529f87e8c","method":"GET","url":"/ready"},"res":{"statusCode":503},"err":{"type":"Error","message":"failed with status code 503","stack":"Error: failed with status code 503\n    at onResFinished (C:\\Users\\SHUBHAM KUMAR\\Documents\\Codex\\2026-09-13\\th\\outputs\\rx-client-crm-backend\\node_modules\\pino-http\\logger.js:115:39)\n    at ServerResponse.onResponseComplete (C:\\Users\\SHUBHAM KUMAR\\Documents\\Codex\\2026-09-13\\th\\outputs\\rx-client-crm-backend\\node_modules\\pino-http\\logger.js:178:14)\n    at ServerResponse.emit (node:events:521:24)\n    at onFinish (node:_http_outgoing:1026:10)\n    at callback (node:internal/streams/writable:764:21)\n    at afterWrite (node:internal/streams/writable:708:5)\n    at afterWriteTick (node:internal/streams/writable:694:10)\n    at processTicksAndRejections (node:internal/process/task_queues:89:21)"},"responseTime":1,"msg":"request errored"}
+··
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/marketing-campaigns.test.js > WhatsApp marketing campaigns > enrolls only contacts with recorded opt-in and queues a Marketing template
+AssertionError: expected { total: 2, eligible: 2, …(13) } to match object { total: 2, eligible: 1, …(2) }
+(11 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "active": 1,
+-   "eligible": 1,
+-   "suppressed": 1,
++   "active": 2,
++   "eligible": 2,
++   "suppressed": 0,
+    "total": 2,
+  }
+
+ ❯ tests/marketing-campaigns.test.js:37:28
+     35| 
+     36|     const launched = await marketing.launchCampaign("RXDH", campaign.c…
+     37|     expect(launched.stats).toMatchObject({ total: 2, eligible: 1, supp…
+       |                            ^
+     38| 
+     39|     await marketing.processDue(10);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  tests/marketing-campaigns.test.js > WhatsApp marketing campaigns > schedules direct existing-client campaigns only for recorded opt-ins
+AssertionError: expected { …(11) } to match object { …(4) }
+(7 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "batchCount": 2,
++   "batchCount": 3,
+    "intervalMinutes": 5,
+    "relationshipType": "EXISTING_CLIENT",
+-   "totalContacts": 2,
++   "totalContacts": 3,
+  }
+
+ ❯ tests/marketing-campaigns.test.js:366:20
+    364|     }, { userId: "USR_ADMIN", role: "ADMIN" });
+    365| 
+    366|     expect(result).toMatchObject({
+       |                    ^
+    367|       relationshipType: "EXISTING_CLIENT",
+    368|       totalContacts: 2,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  tests/marketing-campaigns.test.js > WhatsApp marketing campaigns > previews opted-in existing clients and schedules one batch per day
+AssertionError: expected { totalExistingClients: 3, …(7) } to match object { Object (addressable, batchSize, ...) }
+(7 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "addressable": 2,
++   "addressable": 3,
+    "batchSize": 220,
+    "daysToComplete": 1,
+    "suppressed": {
+-     "optInNotRecorded": 1,
++     "optInNotRecorded": 0,
+    },
+  }
+
+ ❯ tests/marketing-campaigns.test.js:406:21
+    404| 
+    405|     const preview = await marketing.previewExistingAudience("RXDH", { …
+    406|     expect(preview).toMatchObject({
+       |                     ^
+    407|       addressable: 2,
+    408|       batchSize: 220,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  tests/message-decision.test.js > WhatsApp message decision policy > blocks Marketing when opt-in is missing
+AssertionError: expected 'Promotional or re-engagement content …' to be 'MARKETING_OPT_IN_REQUIRED' // Object.is equality
+
+Expected: "MARKETING_OPT_IN_REQUIRED"
+Received: "Promotional or re-engagement content requires an approved Marketing template"
+
+ ❯ tests/message-decision.test.js:46:86
+     44| 
+     45|   it("blocks Marketing when opt-in is missing", () => {
+     46|     expect(decision({ eventType: "LEAD_REENGAGEMENT", isPromotional: t…
+       |                                                                                      ^
+     47|   });
+     48| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  2 failed | 44 passed (46)
+      Tests  4 failed | 252 passed (256)
+   Start at  18:43:01
+   Duration  4.64s (transform 1.45s, setup 0ms, collect 17.26s, tests 5.83s, environment 14ms, prepare 8.43s)
+

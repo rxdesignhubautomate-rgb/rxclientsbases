@@ -5,6 +5,7 @@ import { sha256 } from "../utils/hashing.js";
 import { now } from "../utils/dates.js";
 import { ConflictError, NotFoundError } from "../utils/errors.js";
 import { classificationProjection } from "./client-classification.js";
+import { businessOptedIn } from './business-opt-in-policy.js';
 
 export class ContactService {
   constructor({ store, audit, notifications }) {
@@ -38,6 +39,13 @@ export class ContactService {
       notes: input.notes || "",
       source: input.source || "MANUAL",
       status: input.status || "ACTIVE",
+      marketingOptIn: businessOptedIn(input),
+      marketingOptOut: input.marketingOptOut === true,
+      optInStatus: businessOptedIn(input) ? 'OPTED_IN' : 'OPTED_OUT',
+      marketingConsent: input.marketingConsent || { status: businessOptedIn(input) ? 'OPTED_IN' : 'OPTED_OUT', source: 'BUSINESS_OPT_IN_POLICY' },
+      doNotMarket: input.doNotMarket === true,
+      stopAllCommunications: input.stopAllCommunications === true,
+      suppressed: input.suppressed === true,
       createdAt: timestamp,
       updatedAt: timestamp,
       lastInteractionAt: timestamp
@@ -56,6 +64,11 @@ export class ContactService {
       }
     });
     await this.audit.write(actorAudit(actor, orgId, "CONTACT_CREATED", "CONTACT", contactId, {}, contact));
+    if (this.marketingSafety) {
+      if (!businessOptedIn(contact)) await this.marketingSafety.suppressInbound(orgId, contactId, { messageId: `contact-stop-${contactId}`, senderId: primaryPhone }, contact.stopAllCommunications || contact.status === 'BLOCKED' ? 'all' : 'marketing');
+      await this.store.update(COLLECTIONS.contacts, contactId, { crmV1SuppressionPrepared: true });
+      contact.crmV1SuppressionPrepared = true;
+    }
     return contact;
   }
 

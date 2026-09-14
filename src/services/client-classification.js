@@ -1,3 +1,4 @@
+import { businessOptedIn } from './business-opt-in-policy.js';
 import { parsePhoneNumberFromString, isSupportedCountry } from "libphonenumber-js/max";
 
 export const CLASSIFICATION_VERSION = 1;
@@ -68,13 +69,13 @@ export function classificationProjection(contact) {
 }
 
 export function permissionVisibility(contact) {
-  // Legacy status is visible evidence to review, never upgraded to a permission grant.
+  // Display the owner-confirmed default; destination-level stops are checked by marketing safety.
   const legacy = contact.marketingConsent || {};
-  const suppressed = legacy.status === "OPTED_OUT" || contact.marketingOptOut === true || contact.optInStatus === "OPTED_OUT" || contact.doNotMarket === true || contact.stopAllCommunications === true;
+  const suppressed = !businessOptedIn(contact);
   return {
-    channel: "WHATSAPP", purpose: "marketing", state: suppressed ? "suppressed" : "unknown",
-    eligible: false, reason: suppressed ? "SUPPRESSED" : "DESTINATION_EVIDENCE_REVIEW_REQUIRED",
-    legacyStatus: legacy.status || "UNKNOWN", source: legacy.source || null,
+    channel: "WHATSAPP", purpose: "marketing", state: suppressed ? "suppressed" : "granted",
+    eligible: !suppressed, reason: suppressed ? "SUPPRESSED" : null,
+    legacyStatus: legacy.status || "UNKNOWN", source: legacy.source || "BUSINESS_OPT_IN_POLICY",
     recordedAt: timestampMs(legacy.recordedAt || legacy.updatedAt || legacy.optedInAt || legacy.optedOutAt),
     sendingAvailable: false
   };

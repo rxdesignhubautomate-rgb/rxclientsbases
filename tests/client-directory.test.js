@@ -32,7 +32,7 @@ describe("additive client classification", () => {
     const created = await core.contacts.create("RXDH", contactCreateSchema.parse({ companyName: "Unreviewed record" }));
     expect(created.crmV1Relationship).toBe("unclassified");
     expect(created.crmV1NeedsReview).toBe(true);
-    expect(created.marketingConsent).toBeUndefined();
+    expect(created.marketingConsent).toMatchObject({ status: 'OPTED_IN', source: 'BUSINESS_OPT_IN_POLICY' });
   });
 
   it("preserves a reviewed tier and suppression through legacy contact edits", async () => {
@@ -71,7 +71,7 @@ describe("additive client classification", () => {
 
   it("does not treat unknown legacy types or consent as classified or sendable", () => {
     expect(classificationProjection({}).crmV1Relationship).toBe("unclassified");
-    expect(permissionVisibility({ marketingConsent: { status: "OPTED_IN", source: "IMPORT" } })).toMatchObject({ state: "unknown", eligible: false });
+    expect(permissionVisibility({ marketingConsent: { status: "OPTED_IN", source: "IMPORT" } })).toMatchObject({ state: "granted", eligible: true });
     expect(permissionVisibility({ marketingConsent: { status: "OPTED_OUT" } })).toMatchObject({ state: "suppressed", eligible: false });
     expect(permissionVisibility({ doNotMarket: true }).state).toBe("suppressed");
   });

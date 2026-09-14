@@ -11,10 +11,10 @@ function makeMarketing(core) {
 }
 
 describe("WhatsApp marketing campaigns", () => {
-  it("enrolls only contacts with recorded opt-in and queues a Marketing template", async () => {
+  it("excludes explicit opt-outs and queues a Marketing template", async () => {
     const core = makeCore();
     const seeded = await seedConversation(core);
-    const unconsented = await core.contacts.create("RXDH", { contactPerson: "No Consent", primaryPhone: "9999999999" });
+    const unconsented = await core.contacts.create("RXDH", { contactPerson: "Opted Out", primaryPhone: "9999999999", marketingOptOut: true });
     const marketing = makeMarketing(core);
     await marketing.recordConsent("RXDH", seeded.contact.contactId, {
       status: "OPTED_IN",
@@ -325,7 +325,7 @@ describe("WhatsApp marketing campaigns", () => {
     })).rejects.toThrow(/another team member/);
   });
 
-  it("schedules direct existing-client campaigns only for recorded opt-ins", async () => {
+  it("schedules existing clients including owner-confirmed default opt-ins", async () => {
     const core = makeCore();
     const seeded = await seedConversation(core);
     const second = await core.contacts.create("RXDH", {
@@ -365,11 +365,11 @@ describe("WhatsApp marketing campaigns", () => {
 
     expect(result).toMatchObject({
       relationshipType: "EXISTING_CLIENT",
-      totalContacts: 2,
-      batchCount: 2,
+      totalContacts: 3,
+      batchCount: 3,
       intervalMinutes: 5
     });
-    expect(result.campaigns).toHaveLength(2);
+    expect(result.campaigns).toHaveLength(3);
     expect(result.campaigns.every((campaign) => campaign.status === "SCHEDULED")).toBe(true);
     expect(new Date(result.campaigns[1].startAt).getTime() - new Date(result.campaigns[0].startAt).getTime()).toBe(5 * 60 * 1000);
   });
@@ -404,10 +404,10 @@ describe("WhatsApp marketing campaigns", () => {
 
     const preview = await marketing.previewExistingAudience("RXDH", { batchSize: 220 });
     expect(preview).toMatchObject({
-      addressable: 2,
+      addressable: 3,
       batchSize: 220,
       daysToComplete: 1,
-      suppressed: { optInNotRecorded: 1 }
+      suppressed: { optInNotRecorded: 0 }
     });
 
     const result = await marketing.createDirectExistingCampaigns("RXDH", {
@@ -421,8 +421,8 @@ describe("WhatsApp marketing campaigns", () => {
     }, { userId: "USR_ADMIN", role: "ADMIN" });
 
     expect(result).toMatchObject({
-      totalContacts: 2,
-      batchCount: 2,
+      totalContacts: 3,
+      batchCount: 3,
       intervalDays: 1,
       dailyBatches: true
     });

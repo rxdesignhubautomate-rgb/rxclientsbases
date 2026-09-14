@@ -42,8 +42,8 @@ describe("WhatsApp message decision policy", () => {
     }).mode).toBe("MARKETING_TEMPLATE");
   });
 
-  it("blocks Marketing when opt-in is missing", () => {
-    expect(decision({ eventType: "LEAD_REENGAGEMENT", isPromotional: true }).reason).toBe("MARKETING_OPT_IN_REQUIRED");
+  it("allows owner-confirmed opt-in when individual opt-in is missing", () => {
+    expect(decision({ eventType: "LEAD_REENGAGEMENT", isPromotional: true }).mode).toBe("MARKETING_TEMPLATE");
   });
 
   it("blocks an opted-out customer", () => {

@@ -1,3 +1,4 @@
+import { businessOptedIn } from './business-opt-in-policy.js';
 import { COLLECTIONS } from "../config/constants.js";
 import { createId } from "../utils/ids.js";
 import { now, toDate } from "../utils/dates.js";
@@ -122,7 +123,7 @@ export class MarketingService {
       }
     }
     if (input.repeatMarketing === true) {
-      if (contact.marketingConsent?.status !== "OPTED_IN") {
+      if (!businessOptedIn(contact)) {
         throw new ConflictError("Record WhatsApp marketing opt-in before adding this customer to repeat marketing");
       }
     }
@@ -285,7 +286,7 @@ export class MarketingService {
     const contacts = result.items
       .filter((contact) => relationshipTypes.includes(contact.relationshipType || "PROSPECT"))
       .filter((contact) => contact.status === "ACTIVE")
-      .filter((contact) => !input.onlyOptedIn || contact.marketingConsent?.status === "OPTED_IN" || contact.marketingOptIn === true)
+      .filter((contact) => !input.onlyOptedIn || businessOptedIn(contact))
       .sort((left, right) => String(left.contactId || left.id).localeCompare(String(right.contactId || right.id)));
     if (!contacts.length) throw new ConflictError(`No active ${relationshipType === "EXISTING_CLIENT" ? "existing clients" : "prospects"} were found`);
     const batchSize = Math.min(Number(input.batchSize) || MAX_RECIPIENTS_PER_BATCH, MAX_RECIPIENTS_PER_BATCH);
@@ -1298,7 +1299,7 @@ function eligibilityReason(contact) {
   if (contact.suppressed === true) return contact.marketingOptOut === true ? "OPTED_OUT" : "SUPPRESSED";
   if (contact.marketingConsent?.status === "OPTED_OUT") return "OPTED_OUT";
   if (contact.marketingOptOut === true) return "OPTED_OUT";
-  if (contact.marketingConsent?.status !== "OPTED_IN" && contact.marketingOptIn !== true) return "OPT_IN_NOT_RECORDED";
+  if (!businessOptedIn(contact)) return "OPTED_OUT";
   return null;
 }
 
