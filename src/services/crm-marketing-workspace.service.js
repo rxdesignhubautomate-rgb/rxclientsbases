@@ -636,7 +636,8 @@ export class CrmMarketingWorkspaceService {
     const message = await this.messages.get(actor.orgId, messageId);
     await this.directory.checkedContact(actor, message.contactId);
     if (!message.metadata?.campaignId) throw new ConflictError('Review this message in its original workflow');
-    await this.get(actor, 'campaigns', message.metadata.campaignId);
+    try { await this.get(actor, 'campaigns', message.metadata.campaignId); }
+    catch (error) { if (!(error instanceof NotFoundError)) throw error; }
     if (input.outcome === 'ACCEPTED' && !input.providerMessageId) throw new ConflictError('Confirmed provider acceptance needs its message ID');
     if (input.providerMessageId) {
       const matches = await this.store.find('messages', { filters: [['orgId', '==', actor.orgId], ['providerMessageId', '==', input.providerMessageId]], limit: 2 });
