@@ -46,6 +46,7 @@ export function marketingWorkspaceRoutes(service) {
   router.post('/replies/:id/review', wrap(async (req, res) => sendData(res, await service.reviewReply(req.auth, req.params.id, req.body))));
   router.get('/replies', wrap(async (req, res) => sendData(res, await service.replies(req.auth, req.query))));
   router.post('/messages/:id/reconcile', wrap(async (req, res) => sendData(res, await service.reconcileUnknown(req.auth, req.params.id, req.body))));
+  router.get('/messages/unresolved', wrap(async (req, res) => sendData(res, await service.unresolvedMessages(req.auth))));
   router.get('/rules', wrap(async (req, res) => sendData(res, await service.rules(req.auth))));
   router.put('/rules', wrap(async (req, res) => sendData(res, await service.rules(req.auth, req.body))));
   router.post('/events', wrap(async (req, res) => sendData(res, await service.businessEvent(req.auth, req.body))));
