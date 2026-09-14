@@ -9,7 +9,7 @@ export function marketingWorkspaceRoutes(service) {
     assertPermission(req.auth, 'marketing.read');
     return sendData(res, { enabled: true, settings: await service.safety.settings(req.auth.orgId), dispatchConfigured: service.safety.dispatchEnabled, templates: service.templateRegistry.listConfigured().filter(t => t.category === 'MARKETING'), actorId: req.auth.userId });
   }));
-  router.patch('/settings', wrap(async (req, res) => sendData(res, await service.safety.setEnabled(req.auth, req.body.enabled, req.body.reason))));
+  router.patch('/settings', wrap(async (req, res) => sendData(res, await service.safety.setEnabled(req.auth, req.body.enabled, req.body.reason, { directActivation: req.body.directActivation ?? false }))));
   router.post('/history/prepare', wrap(async (req, res) => sendData(res, await prepareMarketingHistory(service, req.auth))));
   router.put('/rollout', wrap(async (req, res) => sendData(res, await service.safety.configureRollout(req.auth, req.body))));
   router.get('/overview', wrap(async (req, res) => sendData(res, await service.overview(req.auth))));

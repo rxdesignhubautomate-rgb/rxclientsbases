@@ -11,6 +11,9 @@ export async function backfillMarketingSuppressionPage(store, { orgId, cursor, l
   const page = await store.find('contacts', { filters: [['orgId', '==', orgId]], orderBy: ['__name__', 'asc'], cursor: decoded, limit });
   const result = { scanned: page.items.length, prepared: 0, suppressed: 0, phoneReview: 0, skipped: 0, committed: commit, nextCursor: page.pagination.nextCursor };
   for (const item of page.items) {
+    // Most contacts were already prepared. Avoid a separate transaction/read
+    // for each one while locating a few newly imported records.
+    if (item.crmV1SuppressionPrepared === true) { result.skipped++; continue; }
     const outcome = await store.runTransaction(async tx => {
       const contact = await tx.get('contacts', item.contactId || item.id);
       if (!contact || contact.orgId !== orgId || contact.crmV1SuppressionPrepared) return 'skipped';
