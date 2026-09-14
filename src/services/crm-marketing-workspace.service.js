@@ -602,8 +602,10 @@ export class CrmMarketingWorkspaceService {
   // campaign's recipient list. Never mutates anything.
   async unresolvedMessages(actor) {
     assertPermission(actor, 'marketing.reconcile');
-    const page = await this.store.find('messages', { filters: [['orgId', '==', actor.orgId], ['status', '==', 'DELIVERY_UNKNOWN']], limit: 50 });
-    const sorted = [...page.items].sort((a, b) => (timestampMs(b.createdAt) ?? 0) - (timestampMs(a.createdAt) ?? 0));
+    const page = await this.store.find('marketingDestinationState', { filters: [['orgId', '==', actor.orgId], ['reviewRequired', '==', true]], limit: 50 });
+    const messageIds = [...new Set(page.items.flatMap(s => (s.slots || []).filter(slot => slot.state === 'submission_unknown').map(slot => slot.messageId)))].slice(0, 50);
+    const messages = (await this.store.getMany('messages', messageIds)).filter(m => m.orgId === actor.orgId);
+    const sorted = messages.sort((a, b) => (timestampMs(b.createdAt) ?? 0) - (timestampMs(a.createdAt) ?? 0));
     const contacts = new Map((await this.store.getMany('contacts', sorted.map(m => m.contactId))).map(c => [c.contactId || c.id, c]));
     return { items: sorted.flatMap(m => {
       const contact = contacts.get(m.contactId);
@@ -612,6 +614,36 @@ export class CrmMarketingWorkspaceService {
         companyName: contact?.companyName || contact?.contactPerson || m.contactId,
         destination: canonicalDestination(m.recipientId) || m.recipientId, createdAt: m.createdAt }];
     }) };
+  }
+  // Companion to reconcileUnknown(), but for messages the legacy history backfill
+  // flagged (marketingDestinationState.reviewRequired). Those predate the
+  // crmUpgrade campaign system, so they usually have no live campaign record,
+  // no matching outbox row, and may sit at a status other than exactly
+  // DELIVERY_UNKNOWN (e.g. SENDING). reconcileUnknown() intentionally requires
+  // all of that for its live-campaign safety guarantees and stays unchanged;
+  // this path is narrower in scope (legacy read-only history) but still
+  // requires the same permission, evidence and reason as any other decision.
+  async resolveHistoryReview(actor, messageId, raw) {
+    assertPermission(actor, 'marketing.reconcile');
+    const input = z.object({ outcome: z.enum(['ACCEPTED', 'NOT_ACCEPTED']), evidenceReference: z.string().trim().min(5).max(500), reason: z.string().trim().min(5).max(500) }).strict().parse(raw);
+    const message = await this.messages.get(actor.orgId, messageId);
+    const contact = await this.directory.checkedContact(actor, message.contactId);
+    const accepted = input.outcome === 'ACCEPTED';
+    const e164 = canonicalDestination(message.recipientId), key = e164 && destinationKey(actor.orgId, e164);
+    const date = new Date(this.clock());
+    await this.store.runTransaction(async tx => {
+      const [current, state] = await Promise.all([tx.get('messages', messageId), key ? tx.get('marketingDestinationState', key) : Promise.resolve(null)]);
+      if (current?.orgId !== actor.orgId) throw new ConflictError('Message already changed; reload before reviewing');
+      tx.update('messages', messageId, { status: accepted ? 'SENT' : 'CANCELLED', submissionState: accepted ? 'accepted' : 'confirmed_not_accepted', errorCode: null, errorMessage: null, reconciliationSource: 'STAFF_LEGACY_HISTORY_REVIEW', reconciledBy: actor.userId, updatedAt: date });
+      if (key) {
+        const slots = (state?.slots || []).filter(s => s.messageId !== messageId);
+        if (accepted) slots.push({ messageId, at: this.clock(), state: 'accepted', contentId: message.metadata?.contentVersionId || null });
+        tx.set('marketingDestinationState', key, { ...state, orgId: actor.orgId, e164, slots, reviewRequired: slots.some(s => s.state === 'submission_unknown'), ...(accepted ? { lastAcceptedAt: date } : {}) });
+        if (accepted) tx.update('contacts', message.contactId, { crmV1LastMarketingAtMs: this.clock() });
+      }
+      tx.create('auditLogs', sha256(`${messageId}:legacy-review:${date.getTime()}`), { orgId: actor.orgId, actorId: actor.userId, action: 'LEGACY_HISTORY_REVIEWED', entityId: messageId, metadata: { ...input, contactId: contact.contactId || contact.id }, createdAt: date });
+    });
+    return { messageId, outcome: input.outcome };
   }
   async replies(actor, raw = {}) {
     assertPermission(actor, 'marketing.read');
