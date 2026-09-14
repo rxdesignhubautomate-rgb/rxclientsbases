@@ -1,97 +1,198 @@
-# rx-whatsapp-crm
+# RX Design Hub Communication CRM
 
+Production-oriented, channel-independent CRM and business-operations backend for RX Design Hub. Firebase is the durable business memory, the API is the control centre, WhatsApp is a replaceable adapter, AI is a constrained assistant, and the web CRM uses shared-inbox OTP sessions to access versioned APIs.
 
+The migration is non-destructive. Existing `leads`, `messages`, device approvals, sequences, alerts, digest settings, and legacy dashboard endpoints are preserved while permanent IDs and organization-scoped records are added alongside legacy documents.
 
-## Getting started
+## Requirements
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+- Node.js 24 (matching `package.json` and `render.yaml`)
+- A Firebase project with Firestore and Cloud Storage enabled
+- A Meta WhatsApp Cloud API application and phone number
+- An OpenAI API key when AI mode is not `OFF`
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## Local setup
 
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
+```bash
+cp .env.example .env
+npm install
+npm run seed:channel -- --dry-run --org-id=RXDH
+npm run seed:channel -- --org-id=RXDH
+npm run dev
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/rxdesignlko-group/rx-whatsapp-crm.git
-git branch -M main
-git push -uf origin main
+
+On PowerShell use `Copy-Item .env.example .env`. Store real secrets only in `.env` locally and in Render secret environment variables in production. Escaped `\\n` characters in `FIREBASE_PRIVATE_KEY` are converted at startup.
+
+## Important environment variables
+
+The complete list and defaults are in `.env.example`. Production requires Firebase project/client/private-key/storage values; Meta app secret, verify token, access token, and phone-number ID; allowed origins; and an OpenAI key unless `AI_DEFAULT_MODE=OFF`. Standard login uses Firebase Authentication with `PASSWORD_LOGIN_ENABLED=true` and the project's `FIREBASE_WEB_API_KEY`. The legacy shared-inbox OTP flow can remain disabled.
+
+Operational switches:
+
+- `ENABLE_LEGACY_DUAL_WRITE=true`: preserve legacy inbound records during migration.
+- `USE_NEW_CRM_READS=false`: keep the existing dashboard read path during verification.
+- `AI_DEFAULT_MODE=ASSIST`: drafts only by default.
+- `AI_AUTO_SEND_ENABLED=false`: disables automatic AI sending globally even for `AUTO` conversations.
+- `WORKERS_ENABLED=true`: runs durable inbound, outbound, and media pollers in the web process. The production-safe defaults poll inbound/outbound every 15 seconds and media every 60 seconds; quota errors automatically pause each affected worker for 15 minutes.
+- `AUTO_CONFIGURE_WHATSAPP_CHANNEL_ACCOUNT=true`: safely creates or repairs the missing active/default WhatsApp channel record from the Render Meta environment values. An already working default account is preserved.
+
+## Run and verify
+
+```bash
+npm run lint
+npm test
+npm run test:smoke
+npm start
 ```
 
-## Integrate with your tools
+`GET /health` is a lightweight process check. `GET /ready` performs a Firestore read and returns HTTP 503 until the service can use Firebase.
 
-* [Set up project integrations](https://gitlab.com/rxdesignlko-group/rx-whatsapp-crm/-/settings/integrations)
+## Safe migration
 
-## Collaborate with your team
+Always begin with dry runs:
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+```bash
+npm run migrate:audit -- --dry-run --limit=100 --org-id=RXDH
+npm run migrate:backfill-contacts -- --dry-run --limit=100 --org-id=RXDH
+npm run migrate:backfill-conversations -- --dry-run --limit=100 --org-id=RXDH
+npm run migrate:backfill-messages -- --dry-run --limit=100 --org-id=RXDH
+npm run migrate:verify -- --dry-run --limit=100 --org-id=RXDH
+```
 
-## Test and Deploy
+After reviewing the reports in `migration-reports/`, remove `--dry-run` one stage at a time. All backfills support `--limit`, `--start-after`, and `--org-id`, preserve legacy IDs, and skip previously migrated records. Reports contain counts and sanitized source IDs/errors; the directory contents are ignored by Git.
 
-Use the built-in continuous integration in GitLab.
+See [migration guide](docs/migration-guide.md) before changing feature flags.
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+## WhatsApp setup and account recovery
 
-***
+Configure Meta to verify and deliver events to:
 
-# Editing this README
+```text
+https://YOUR_RENDER_HOST/webhooks/whatsapp
+```
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+The legacy `/webhook/whatsapp` form remains accepted. Subscribe to messages and message-status events, and configure `META_APP_SECRET` so POST signatures can be verified.
 
-## Suggestions for a good README
+To replace a banned or unavailable account:
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+1. Create/seed the new account without changing the old records.
+2. Activate the new account.
+3. Make it default.
+4. Disable the old account.
+5. Send a test through `POST /api/v1/conversations/:id/messages` and inspect its message/outbox/account IDs.
 
-## Name
-Choose a self-explaining name for your project.
+Historical messages retain their original `channelAccountId`. See the [channel switch guide](docs/channel-switch-guide.md).
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+## Policy-safe WhatsApp decisions and campaigns
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+All new manual replies, AI auto-replies, transactional event notifications, and Marketing campaign steps use a central audited decision service. It selects `SERVICE_MESSAGE`, `UTILITY_TEMPLATE`, `MARKETING_TEMPLATE`, or `DO_NOT_SEND`; promotional content is never relabelled as Utility. Utility events must reference a real order or quotation, Marketing requires recorded opt-in, and every template send requires a synced Meta status of `APPROVED`.
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+Campaigns support internal submit/approve/schedule/start/pause/resume/cancel operations, deterministic duplicate protection, configurable 24-hour/7-day/30-day frequency limits, Firestore transaction locks, controlled worker delay, and delivery/read/failure counters. Meta approves templates; the CRM separately approves campaigns.
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+Use `POST /api/v1/whatsapp/templates/sync` after deployment. The complete environment list, architecture, routes, curl examples, worker modes, Firestore collections, Meta manual steps, and troubleshooting notes are in [WhatsApp smart messaging](docs/whatsapp-smart-messaging.md).
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## Segmented 500-contact campaigns and open-window media
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+Backend v2.9.0 separates the sales workspace by customer relationship:
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+- `ankit@rxdesignhub.com` can read and work with `EXISTING_CLIENT` records;
+- `reshu@rxdesignhub.com` can read and work with `PROSPECT` and `LEAD` records;
+- Owner, Admin, and Sales Manager roles can work with both segments;
+- creating an order moves a prospect into the existing-client segment and hands the relationship to Ankit.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+`POST /api/v1/marketing/audiences/batches` creates deterministic audience documents with at most 500 contacts each. The batch builder reads the selected segment once and writes each audience once, avoiding duplicate Firestore reads and writes at 10,000–20,000-contact scale.
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+`POST /api/v1/campaigns/direct-existing` is the Owner/Admin one-click path for an existing-client promotion. It never invents consent: only active existing clients with a recorded WhatsApp Marketing opt-in are included. The backend creates 500-contact audience batches, creates and approves one campaign per batch, and schedules the batches at a configurable interval so a 10,000–20,000-contact send is not launched as one synchronous blast.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+Campaigns can use `AUTO` delivery or `OPEN_WINDOW_ONLY`. AUTO sends free-form text inside the live customer-service window and falls back to an approved Meta Marketing template outside it. OPEN_WINDOW_ONLY supports text, image, video, audio, and document steps. When the 24-hour window is closed, enrollment waits without sending; the next inbound customer message reopens the window and resumes the drip. Media assets are stored in Firebase Storage with `purpose=MARKETING_ASSET`.
 
-## Google Drive quotation archive
+## Daily WhatsApp workspace
 
-Set `GOOGLE_DRIVE_QUOTATIONS_FOLDER_ID` to the destination folder ID. The configured default is `1He-4AeMT7HgelGCGRZ_PdDhSv9cLdn97`. Enable Google Drive API for the Firebase project and share that Drive folder with the `FIREBASE_CLIENT_EMAIL` service-account address as **Editor**. Sent quotations are stored as `Party Name - Quotation ID.pdf`; the WhatsApp number is used when the party name is unavailable.
+Backend v2.9.0 and frontend v1.9 add one-click opted-in existing-client scheduling, segmented campaigns, approved video-header Marketing templates and open-window media drips on top of the cached, incremental shared inbox:
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+- text, images, video, documents, audio/voice notes, locations, contact cards, interactive reply buttons, quoted replies, reactions, and clickable links;
+- delivery/read states, unread counters, incremental polling, desktop alerts, built-in/custom quick replies, and internal notes;
+- client tags and Important status, private notes, team assignment, follow-up scheduling, linked orders, and reviewed Utility updates;
+- inline image/video/audio previews, authenticated file open/download, and manual recovery for failed inbound media archives;
+- reliable outbound media delivery by uploading bytes to Meta once, caching the returned media ID, and retaining signed-link fallback;
+- Render-visible outbound send and inbound media-download error logs with Meta codes/messages;
+- an authenticated `/api/v1/whatsapp/capabilities` endpoint that separates features available in this release from Meta account-level setup.
 
-## License
-For open source projects, say how it is licensed.
+WhatsApp Business App coexistence, WhatsApp calling, Flows, catalog/commerce, payments, and any country/account eligibility remain Meta-side products. The CRM does not claim those are enabled until they are configured and approved in the relevant Meta account. See [WhatsApp Inbox setup](docs/whatsapp-inbox-setup.md).
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+## Firebase configuration
+
+Deploy indexes and the server-owned security rules using the Firebase CLI:
+
+```bash
+firebase deploy --only firestore:indexes,firestore:rules,storage
+```
+
+Direct client reads and writes are denied. Authenticated clients call the API; Firebase Admin performs database and storage operations.
+
+## Render deployment
+
+Create a Node web service using `npm ci` and `npm start`, add secret environment values, use the Node version declared in `package.json`, and set `/health` as the health check. `render.yaml` contains safe non-secret defaults. Full instructions are in [deployment-render.md](docs/deployment-render.md).
+
+## Vercel deployment
+
+The existing-client CRM frontend is in `frontend/`. Create a separate Vercel
+project with **Root Directory** set to `frontend` and add:
+
+```env
+CRM_API_BASE_URL=https://rxclientsbases.onrender.com/api/v1
+```
+
+Vercel runs the dependency-free build and publishes `frontend/dist`. Add the
+final Vercel domain to the backend `ALLOWED_ORIGINS` value on Render, then
+redeploy the backend once. The backend, WhatsApp webhook, and polling workers
+remain on Render.
+
+The approved login IDs are configured in `OTP_LOGIN_USERS`. All OTPs go only to
+`OTP_DELIVERY_EMAIL`; unknown login IDs are rejected. OTPs expire after 10
+minutes, permit five incorrect attempts, and create a time-limited server-side
+session. Use a Gmail App Password in `OTP_SMTP_APP_PASSWORD`, never the normal
+Gmail password.
+
+## Existing-client order register
+
+The frontend's **Import register** page accepts CSV, TSV, or a pasted Excel
+table. It first calls a read-only preview, removes rows without a party name,
+normalizes phones and money expressions, and displays warnings. The commit step
+creates or reuses the permanent client profile, creates its historical order and
+payments, and stores an idempotency key so importing the same row twice does not
+create duplicates. Only `OWNER` and `ADMIN` users can import.
+
+## Process Management order sync
+
+`POST /api/v1/integrations/process-orders` accepts signed server-to-server
+updates from the RX Process Management app. Configure the same random 32+
+character value as `PROCESS_ORDER_SYNC_SECRET` on Render and
+`CRM_ORDER_SYNC_SECRET` on the Process Management Vercel project. The Vercel
+project also needs:
+
+```text
+CRM_ORDER_SYNC_URL=https://YOUR_RENDER_HOST/api/v1/integrations/process-orders
+```
+
+The integration verifies the source order in the Process Management Firebase
+project before sending it. In CRM it reuses a client by normalized phone,
+creates a client only when needed, and deterministically upserts the order so
+retries or later edits never create duplicate orders. A newly linked order also
+stops active drip enrollments for that client as converted.
+
+## API and operations documentation
+
+- [Architecture](docs/architecture.md)
+- [Current-system audit](docs/current-system-audit.md)
+- [API reference](docs/api-reference.md)
+- [Firestore schema](docs/firestore-schema.md)
+- [WhatsApp setup](docs/whatsapp-setup.md)
+- [WhatsApp smart messaging and campaign policy](docs/whatsapp-smart-messaging.md)
+- [Migration guide](docs/migration-guide.md)
+- [Render deployment](docs/deployment-render.md)
+- [Security](docs/security.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Channel switching](docs/channel-switch-guide.md)
+
+Existing sales-engine behavior is described in `SALES_ENGINE_SETUP.md`.

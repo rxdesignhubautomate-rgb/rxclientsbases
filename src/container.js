@@ -199,7 +199,6 @@ export function createContainer(overrides = {}) {
     batchSize: env.CAMPAIGN_BATCH_SIZE,
     logger
   });
-  messages.onQueued = () => outboundWorker.wake();
   return {
     env,
     firebase,

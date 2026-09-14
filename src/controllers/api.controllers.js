@@ -1,4 +1,3 @@
-import { APP_VERSION } from "../config/version.js";
 import { listQuery } from "../utils/pagination.js";
 import { sendData, sendList } from "../utils/http.js";
 import { enforceAssignment } from "../middleware/authorize.js";
@@ -8,7 +7,6 @@ import { ConflictError } from "../utils/errors.js";
 import { ensureWhatsAppChannelAccount } from "../bootstrap/whatsapp-channel-account.js";
 import { CLIENT_SCOPES, relationshipTypesForScope } from "../utils/client-scope.js";
 import { validateTemplateHeaderMedia } from "../services/template-header-media.js";
-import { cachedMarketingOverview } from "../services/marketing-overview-cache.js";
 
 export function createControllers(container) {
   const c = container;
@@ -376,8 +374,6 @@ export function createControllers(container) {
       updateQuickReply: wrap(async (req, res) => sendData(res, await c.quickReplies.update(org(req), req.params.quickReplyId, req.body, actor(req))))
     },
     marketing: {
-      summary: wrap(async (req, res) => sendData(res, await cachedMarketingOverview(c.store, org(req), actor(req)))),
-      previewCampaign: wrap(async (req, res) => sendData(res, await c.marketing.previewCampaign(org(req), req.params.campaignId, actor(req)))),
       templates: wrap(async (_req, res) => sendData(res, c.marketing.listTemplates())),
       listReplied: wrap(async (req, res) => sendList(res, await c.marketing.listRepliedProspects(org(req), {
         ...listQuery(req.query),
@@ -510,7 +506,7 @@ export function createControllers(container) {
     system: {
       info: wrap(async (req, res) => sendData(res, {
         service: "rx-communication-crm",
-        version: APP_VERSION,
+        version: "2.13.0",
         orgId: org(req),
         features: {
           legacyDualWrite: c.env.ENABLE_LEGACY_DUAL_WRITE,
@@ -581,4 +577,3 @@ function decodeUploadName(value) {
     return encoded.slice(0, 240);
   }
 }
-

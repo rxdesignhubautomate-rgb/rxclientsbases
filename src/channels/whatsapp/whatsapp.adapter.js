@@ -93,7 +93,7 @@ export class WhatsAppMetaAdapter extends BaseChannelAdapter {
 
   async downloadMedia({ media }) {
     const metadata = await this.request(`/${media.providerMediaId}`, { method: "GET" });
-    const response = await this.fetch(metadata.url, { signal: globalThis.AbortSignal.timeout(60_000), headers: { Authorization: `Bearer ${this.accessToken}` } });
+    const response = await this.fetch(metadata.url, { headers: { Authorization: `Bearer ${this.accessToken}` } });
     if (!response.ok) throw await channelError(response, "WhatsApp media download failed");
     return {
       buffer: Buffer.from(await response.arrayBuffer()),

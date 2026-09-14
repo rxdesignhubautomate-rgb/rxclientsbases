@@ -13,6 +13,7 @@ import { getRuleReply } from "./ruleReplies.js";
 import { maybeSendHotLeadAlert } from "./salesAlerts.js";
 import { startSequenceIfNeeded } from "./sequenceScheduler.js";
 import { sendWhatsAppText } from "./whatsapp.js";
+import { buildLocalLeadReply } from "./localReplyAgent.js";
 
 export async function processIncomingWhatsAppMessage(incoming) {
   if (isInternalTeamNumber(incoming.from)) {
@@ -26,67 +27,39 @@ export async function processIncomingWhatsAppMessage(incoming) {
   const lead = await findOrCreateLeadByPhone(incoming.from);
   const isFirstCustomerMessage = Number(lead.messageCount || 0) === 0;
 
-  const savedInbound = await saveMessage({
+  await saveMessage({
     leadId: lead.id,
     phone: incoming.from,
     role: "user",
     text: incoming.text,
-    whatsappMessageId: incoming.whatsappMessageId,
-    type: incoming.type || "text",
-    media: incoming.media,
-    context: incoming.context,
-    location: incoming.location,
-    contacts: incoming.contacts,
-    reaction: incoming.reaction,
-    order: incoming.order,
-    timestamp: incoming.timestamp && Number.isFinite(Number(incoming.timestamp)) && Math.abs(Number(incoming.timestamp)) <= 8640000000000 ? new Date(Math.min(Number(incoming.timestamp) * 1000, Date.now())).toISOString() : undefined
+    whatsappMessageId: incoming.whatsappMessageId
   });
-  if (savedInbound.duplicate) return { skipped: true, reason: "duplicate" };
-  if (incoming.type && !["text", "interactive", "button"].includes(incoming.type)) return { skippedAi: true, reason: "attachment_saved" };
 
   const ruleReply = getRuleReply(incoming.text, lead);
   if (ruleReply) {
+    await sendAndSaveReply(lead.id, incoming.from, ruleReply);
     const command = incoming.text.trim().toLowerCase();
 
     if (["stop", "unsubscribe", "band", "band karo"].includes(command)) {
-      const optedOutAt = new Date().toISOString();
       await updateLead(lead.id, {
         aiEnabled: false,
         status: "lost",
-        lostReason: "Customer replied STOP",
         optedOut: true,
         sequenceStatus: "stopped",
         sequenceStopReason: "opted_out",
         nextSequenceAt: null,
-        broadcastOptOutAt: optedOutAt,
-        marketingAwaitingReply: false,
-        marketingReplyPending: false
+        broadcastOptOutAt: new Date().toISOString()
       });
     } else if (["start", "subscribe"].includes(command)) {
-      const wasLostAfterOptOut =
-        lead.status === "lost" && lead.lostReason === "Customer replied STOP";
       await updateLead(lead.id, {
         aiEnabled: true,
         optedOut: false,
-        broadcastOptInAt: new Date().toISOString(),
-        broadcastOptOutAt: null,
-        ...(wasLostAfterOptOut
-          ? {
-              status: "new",
-              lostReason: null,
-              sequenceStatus: "none",
-              sequenceStopReason: null
-            }
-          : {})
+        broadcastOptInAt: new Date().toISOString()
       });
     }
 
-    await sendAndSaveReply(lead.id, incoming.from, ruleReply);
     return { skippedAi: true, reply: ruleReply };
   }
-
-  if (lead.aiEnabled === false || lead.optedOut === true || lead.whatsappBlocked) return { skippedAi: true, reason: "ai_disabled" };
-  if (["converted", "lost"].includes(lead.status)) return { skippedAi: true, reason: "closed_lead" };
 
   if (isHumanHandling(lead)) {
     if (shouldSendHumanAck(lead)) {
@@ -96,52 +69,51 @@ export async function processIncomingWhatsAppMessage(incoming) {
     return { skippedAi: true, reason: "human_handling" };
   }
 
-  if (!config.aiAutoReplyEnabled) {
-    const automatedReply = fallbackContactReply();
-    await sendAndSaveReply(lead.id, incoming.from, automatedReply);
-    await startSequenceIfNeeded({
-      lead,
-      customerMessage: incoming.text,
-      forceProduct: ""
-    });
-
-    return { skippedAi: true, reason: "ai_disabled_fallback_sent", reply: automatedReply };
+  if (!lead.aiEnabled) {
+    await updateLead(lead.id, { aiEnabled: true });
+    lead.aiEnabled = true;
   }
 
   const recentMessages = await getRecentMessages(lead.id, 5);
   let aiResult;
+  let replySource = "ai";
 
-  try {
-    aiResult = await runLeadAgent({
+  if (!config.aiAutoReplyEnabled) {
+    replySource = "local_ai_disabled";
+    aiResult = buildLocalLeadReply({
       lead,
       recentMessages,
       customerMessage: incoming.text
     });
-  } catch (error) {
-    console.error("ai_reply_failed", {
+  } else {
+    try {
+      aiResult = await runLeadAgent({
+        lead,
+        recentMessages,
+        customerMessage: incoming.text
+      });
+    } catch (error) {
+      console.error("ai_reply_failed", {
+        leadId: lead.id,
+        phone: incoming.from,
+        error: error.message
+      });
+
+      replySource = "local_ai_error";
+      aiResult = buildLocalLeadReply({
+        lead,
+        recentMessages,
+        customerMessage: incoming.text
+      });
+    }
+  }
+
+  if (replySource !== "ai") {
+    console.warn("local_reply_fallback_used", {
       leadId: lead.id,
       phone: incoming.from,
-      error: error.message
+      reason: replySource
     });
-
-    const fallbackReply = fallbackContactReply();
-
-    const latest = await findOrCreateLeadByPhone(incoming.from);
-    if (latest.aiEnabled === false || latest.optedOut || latest.whatsappBlocked || isHumanHandling(latest) || ['converted', 'lost'].includes(latest.status)) return { skippedAi: true, reason: 'human_or_closed_before_fallback' };
-    await updateLead(lead.id, {
-      status: "follow_up",
-      nextAction: "Team should follow up because AI reply failed."
-    });
-
-    await sendAndSaveReply(lead.id, incoming.from, fallbackReply);
-
-    await startSequenceIfNeeded({
-      lead,
-      customerMessage: incoming.text,
-      forceProduct: ""
-    });
-
-    return { skippedAi: true, reason: "ai_error_fallback_sent", reply: fallbackReply };
   }
 
   if (detectBuyingSignal(incoming.text) && aiResult.temperature !== "hot") {
@@ -156,14 +128,18 @@ export async function processIncomingWhatsAppMessage(incoming) {
   });
 
   const scorePatch = { leadScore };
+  if (replySource !== "ai") {
+    scorePatch.nextAction = aiResult.next_action || "Team should follow up if customer needs help.";
+  }
+
   if ((aiResult.temperature === "hot" || aiResult.handoff_required) && !lead.followUpAt) {
     scorePatch.followUpAt = nextDayFollowUpAt();
-    scorePatch.followUpReason = "Auto: hot lead - contact within 24h";
+    scorePatch.followUpReason = replySource === "ai"
+      ? "Auto: hot lead - contact within 24h"
+      : "Auto: local fallback marked follow-up within 24h";
     scorePatch.reminderStatus = "scheduled";
   }
 
-  const current = await findOrCreateLeadByPhone(incoming.from);
-  if (!current.aiEnabled || current.optedOut || isHumanHandling(current) || ["converted", "lost"].includes(current.status)) return { skippedAi: true, reason: "human_or_closed_before_send" };
   await updateLeadFromAi(lead.id, aiResult, lead);
   await updateLead(lead.id, scorePatch);
   await sendAndSaveReply(lead.id, incoming.from, aiResult.reply);
@@ -181,10 +157,12 @@ export async function processIncomingWhatsAppMessage(incoming) {
     lead,
     customerMessage: incoming.text,
     aiResult,
-    forceProduct: ""
+    forceProduct: isFirstCustomerMessage ? "visual_aid" : ""
   });
 
-  return { skippedAi: false, aiResult };
+  return replySource === "ai"
+    ? { skippedAi: false, aiResult }
+    : { skippedAi: true, reason: replySource, reply: aiResult.reply };
 }
 
 function isHumanHandling(lead) {
@@ -224,18 +202,12 @@ function isInternalTeamNumber(phone) {
   return Object.values(config.alertNumbers).some((teamNumber) => teamNumber && teamNumber === digits);
 }
 
-function fallbackContactReply() {
-  return "Sir, message receive ho gaya hai.\n\nRX Design Hub team jaldi hi aapse connect karegi.\n\nAap urgent baat ke liye is number par call kar sakte hain: 9129172980";
-}
-
 async function sendAndSaveReply(leadId, phone, reply) {
-  const result = await sendWhatsAppText(phone, reply);
+  await sendWhatsAppText(phone, reply);
   await saveMessage({
     leadId,
     phone,
     role: "ai",
-    text: reply,
-    whatsappMessageId: result.messages?.[0]?.id || null,
-    status: "accepted"
+    text: reply
   });
 }

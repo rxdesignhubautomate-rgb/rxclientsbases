@@ -14,8 +14,6 @@ export function marketingRoutes(controller) {
   const router = express.Router();
   router.use(authorizeRole("OWNER", "ADMIN", "SALES"));
   router.get("/templates", controller.templates);
-  router.get("/summary", controller.summary);
-  router.get("/campaigns/:campaignId/preview", controller.previewCampaign);
   router.get("/replied", controller.listReplied);
   router.patch("/replied/:contactId", validate(marketingProspectUpdateSchema), controller.updateReplied);
   router.patch("/contacts/:contactId/consent", validate(marketingConsentSchema), controller.consent);

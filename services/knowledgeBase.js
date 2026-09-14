@@ -2,7 +2,6 @@
 
 export const companyKnowledge = {
   businessName: "RX Design Hub",
-  website: "https://www.rxdesignhub.com/",
   location: "Lucknow, India",
   mapsLink: "https://maps.app.goo.gl/1g3AkCQXgogu7mNG7",
   serviceArea: "PAN India",
@@ -41,18 +40,15 @@ export const companyKnowledge = {
     "Hinglish, short WhatsApp style, professional, warm and energetic. Use Sir only. Reply in 2 short lines with blank line spacing. Avoid long paragraphs."
 };
 
-export const sampleChannelUrl =
-  "https://whatsapp.com/channel/0029Vb8Xo52KwqSQbqZeAR0s";
-
 export const sampleLinks = {
-  visualAid: sampleChannelUrl,
-  reminderCard: sampleChannelUrl,
-  chitPad: sampleChannelUrl,
-  chemistBook: sampleChannelUrl,
-  prescriptionPad: sampleChannelUrl,
-  eVisualApp: `${sampleChannelUrl}/108`,
-  diary: sampleChannelUrl,
-  calendar: sampleChannelUrl
+  visualAid: "https://whatsapp.com/channel/0029Vb6tmie11ulRBYVDwx3K/111",
+  reminderCard: "https://whatsapp.com/channel/0029Vb81mBL96H4VGqKySz1s",
+  chitPad: "https://whatsapp.com/channel/0029Vb81mBL96H4VGqKySz1s",
+  chemistBook: "https://whatsapp.com/channel/0029Vb81mBL96H4VGqKySz1s",
+  prescriptionPad: "https://whatsapp.com/channel/0029Vb81mBL96H4VGqKySz1s",
+  eVisualApp: "https://whatsapp.com/channel/0029Vb81mBL96H4VGqKySz1s",
+  diary: "https://whatsapp.com/channel/0029Vb81mBL96H4VGqKySz1s",
+  calendar: "https://whatsapp.com/channel/0029Vb81mBL96H4VGqKySz1s"
 };
 
 export const products = [
@@ -289,11 +285,6 @@ export const fixedFaqs = [
       "Ji Sir, main urgent basis par sales representative assign karta hun. Aap product aur quantity share kar dijiye."
   },
   {
-    keywords: ["website", "web site", "site link", "company site", "rxdesignhub.com"],
-    answer:
-      `Ji Sir, RX Design Hub ki website yahan dekh sakte hain: ${companyKnowledge.website}`
-  },
-  {
     keywords: ["location", "address", "map", "office", "lucknow", "pata"],
     answer:
       `Sir, hamara office Lucknow me hai aur PAN India service available hai. Location: ${companyKnowledge.mapsLink}`
@@ -343,10 +334,9 @@ export function buildKnowledgePrompt(customerMessage = "") {
   const relevant = findRelevantKnowledge(customerMessage);
 
   return `
-  COMPANY KNOWLEDGE:
-  Business Name: ${relevant.company.businessName}
-  Website: ${relevant.company.website}
-  Location: ${relevant.company.location}
+COMPANY KNOWLEDGE:
+Business Name: ${relevant.company.businessName}
+Location: ${relevant.company.location}
 Map Link: ${relevant.company.mapsLink}
 Service Area: ${relevant.company.serviceArea}
 Opening Intro: ${relevant.company.openingIntro}
@@ -406,7 +396,6 @@ STRICT SALES RULES:
 13. If multiple products are mentioned, acknowledge in one line and collect requirement product-by-product, one question at a time.
 14. Design-only and printing-only work both accepted.
 15. Do not mention that you are AI.
-  16. Never send one long paragraph. Use \n\n between short WhatsApp lines.
-  17. If the customer asks for the website, send this exact link: ${relevant.company.website}
-  `;
+16. Never send one long paragraph. Use \n\n between short WhatsApp lines.
+`;
 }

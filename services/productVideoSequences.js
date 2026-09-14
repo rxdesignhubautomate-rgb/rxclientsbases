@@ -34,7 +34,8 @@ export function detectSequenceProduct({ text = "", requirement = "" } = {}) {
   const combined = `${text} ${requirement}`.toLowerCase();
 
   if (
-    combined.includes("visual aid")
+    /\bvisual\b/.test(combined)
+    || combined.includes("visual aid")
     || combined.includes("visualaid")
     || combined.includes("aid book")
     || combined.includes("visual book")
@@ -55,7 +56,7 @@ export function getProductSequence(product, videos = config.visualAidSequenceVid
     caption: String(captions[index] || "").trim()
       || VISUAL_AID_VIDEO_CAPTIONS[index]
       || VISUAL_AID_VIDEO_CAPTIONS[0]
-  })).filter(step => step.media);
+  }));
 
   return {
     product: "visual_aid",
