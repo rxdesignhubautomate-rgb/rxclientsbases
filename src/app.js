@@ -68,14 +68,14 @@ export function createApp(options = {}) {
   });
 
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", service: "rx-communication-crm", version: APP_VERSION, timestamp: new Date().toISOString() });
+    res.json({ status: "ok", service: "rx-communication-crm", version: APP_VERSION, workers: workerHealth(container), timestamp: new Date().toISOString() });
   });
   app.get("/ready", async (_req, res) => {
     try {
       await container.store.get("systemSettings", "readiness");
-      res.json({ status: "ready", service: "rx-communication-crm", version: APP_VERSION, timestamp: new Date().toISOString() });
+      res.json({ status: "ready", service: "rx-communication-crm", version: APP_VERSION, workers: workerHealth(container), timestamp: new Date().toISOString() });
     } catch {
-      res.status(503).json({ status: "not_ready", service: "rx-communication-crm", timestamp: new Date().toISOString() });
+      res.status(503).json({ status: "not_ready", service: "rx-communication-crm", workers: workerHealth(container), timestamp: new Date().toISOString() });
     }
   });
 
@@ -97,5 +97,9 @@ export function createApp(options = {}) {
   app.use(errorHandler);
   app.locals.container = container;
   return app;
+}
+
+function workerHealth(container) {
+  return Object.fromEntries(Object.entries(container.workers || {}).map(([name, worker]) => [name, typeof worker?.loop?.status === "function" ? worker.loop.status() : { started: null }]));
 }
 

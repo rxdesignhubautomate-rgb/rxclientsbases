@@ -37,6 +37,15 @@ export class PollLoop {
     this.schedule(0);
   }
 
+  status() {
+    return {
+      started: this.started,
+      executing: this.executing,
+      failureCount: this.failureCount,
+      retryAfter: this.retryAfter || null
+    };
+  }
+
   schedule(delayMs) {
     if (!this.started) return;
     this.timer = setTimeout(() => {
