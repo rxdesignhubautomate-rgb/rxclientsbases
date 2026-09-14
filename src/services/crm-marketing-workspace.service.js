@@ -602,9 +602,10 @@ export class CrmMarketingWorkspaceService {
   // campaign's recipient list. Never mutates anything.
   async unresolvedMessages(actor) {
     assertPermission(actor, 'marketing.reconcile');
-    const page = await this.store.find('messages', { filters: [['orgId', '==', actor.orgId], ['status', '==', 'DELIVERY_UNKNOWN']], orderBy: ['createdAt', 'desc'], limit: 50 });
-    const contacts = new Map((await this.store.getMany('contacts', page.items.map(m => m.contactId))).map(c => [c.contactId || c.id, c]));
-    return { items: page.items.flatMap(m => {
+    const page = await this.store.find('messages', { filters: [['orgId', '==', actor.orgId], ['status', '==', 'DELIVERY_UNKNOWN']], limit: 50 });
+    const sorted = [...page.items].sort((a, b) => (timestampMs(b.createdAt) ?? 0) - (timestampMs(a.createdAt) ?? 0));
+    const contacts = new Map((await this.store.getMany('contacts', sorted.map(m => m.contactId))).map(c => [c.contactId || c.id, c]));
+    return { items: sorted.flatMap(m => {
       const contact = contacts.get(m.contactId);
       try { if (contact) this.directory.assertRecordScope(actor, contact); } catch { return []; }
       return [{ messageId: m.messageId || m.id, contactId: m.contactId, campaignId: m.metadata?.campaignId || null,
