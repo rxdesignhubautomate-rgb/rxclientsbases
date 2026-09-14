@@ -30,5 +30,6 @@ export function marketingRoutes(controller) {
   router.post("/campaigns/:campaignId/launch", validate(marketingLaunchSchema), controller.launchCampaign);
   router.post("/campaigns/:campaignId/pause", controller.pauseCampaign);
   router.post("/campaigns/:campaignId/resume", controller.resumeCampaign);
+  router.post("/campaigns/:campaignId/retry-failed", controller.retryFailedOutbox);
   return router;
 }

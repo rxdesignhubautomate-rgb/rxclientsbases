@@ -777,6 +777,28 @@ export class MarketingService {
     return this.getCampaign(orgId, campaignId);
   }
 
+  // One-off recovery for outbox rows dead-lettered by a bug that is now fixed
+  // (e.g. a sender identity that had no matching, permissioned user record).
+  // Resets them to PENDING so the existing outbound worker picks them up on
+  // its normal poll cycle -- does not touch campaign/enrollment state at all.
+  async retryFailedOutbox(orgId, campaignId, actor = {}) {
+    assertPermission(actor, 'marketing.send');
+    await this.getCampaign(orgId, campaignId, { actor });
+    const failed = await this.store.find(COLLECTIONS.outbox, { filters: [['orgId', '==', orgId], ['campaignId', '==', campaignId], ['status', '==', 'FAILED']], limit: 500 });
+    let retried = 0;
+    for (const record of failed.items) {
+      const id = record.outboxId || record.id;
+      await this.store.runTransaction(async tx => {
+        const current = await tx.get(COLLECTIONS.outbox, id);
+        if (current?.status !== 'FAILED') return;
+        tx.update(COLLECTIONS.outbox, id, { status: 'PENDING', attemptCount: 0, nextAttemptAt: now(), lockedAt: null, lockedBy: null, lastError: null, updatedAt: now() });
+        tx.update(COLLECTIONS.messages, current.messageId, { status: 'QUEUED', errorCode: null, errorMessage: null, updatedAt: now() });
+      });
+      retried += 1;
+    }
+    await this.audit.write({ orgId, actorId: actor.userId || 'SYSTEM', action: 'MARKETING_OUTBOX_RETRIED', entityType: 'MARKETING_CAMPAIGN', entityId: campaignId, metadata: { retried } });
+    return { campaignId, retried, remaining: failed.items.length - retried };
+  }
   async pauseCampaign(orgId, campaignId, actor = {}) {
     const campaign = await this.getCampaign(orgId, campaignId, { actor });
     if (!RUNNING_CAMPAIGN_STATUSES.has(campaign.status)) throw new ConflictError("Only an active campaign can be paused");

@@ -408,7 +408,8 @@ export function createControllers(container) {
       getCampaign: wrap(async (req, res) => sendData(res, await c.marketing.getCampaign(org(req), req.params.campaignId, { includeEnrollments: true, actor: actor(req) }))),
       launchCampaign: wrap(async (req, res) => sendData(res, await c.marketing.launchCampaign(org(req), req.params.campaignId, req.body, actor(req)), 202)),
       pauseCampaign: wrap(async (req, res) => sendData(res, await c.marketing.pauseCampaign(org(req), req.params.campaignId, actor(req)))),
-      resumeCampaign: wrap(async (req, res) => sendData(res, await c.marketing.resumeCampaign(org(req), req.params.campaignId, actor(req))))
+      resumeCampaign: wrap(async (req, res) => sendData(res, await c.marketing.resumeCampaign(org(req), req.params.campaignId, actor(req)))),
+      retryFailedOutbox: wrap(async (req, res) => sendData(res, await c.marketing.retryFailedOutbox(org(req), req.params.campaignId, actor(req))))
     },
     leads: resourceController(c, "leads", scopedOptions, checkAssigned),
     quotations: {
