@@ -4,6 +4,14 @@ import { sha256 } from "../utils/hashing.js";
 import { now } from "../utils/dates.js";
 import { AppError, ConflictError } from "../utils/errors.js";
 
+const DYNAMIC_UTILITY_PREFIX = "meta:";
+const CONFIGURED_UTILITY_LABELS = Object.freeze({
+  order_confirmation: "Order confirmed with video",
+  design_approved: "Design approved",
+  ready_to_dispatch: "Ready to dispatch",
+  experience_feedback: "Experience feedback"
+});
+
 export class TemplateRegistryService {
   constructor({ store, whatsappAdapter, businessAccountId, overrides = {}, audit = null }) {
     this.store = store;
@@ -15,6 +23,69 @@ export class TemplateRegistryService {
 
   listConfigured() {
     return syncableTemplates(this.templates).map(publicTemplate);
+  }
+
+  /**
+   * Returns the server-configured Utility templates plus any additional
+   * APPROVED Utility templates discovered in the connected Meta WABA.
+   * Marketing and unapproved templates are deliberately excluded.
+   */
+  async listApprovedUtilityTemplates(orgId) {
+    const registry = await this.store.find(COLLECTIONS.templateRegistry, {
+      filters: [["orgId", "==", orgId]],
+      limit: 500
+    });
+    const records = registry.items || [];
+    const configured = Object.values(this.templates)
+      .filter((template) => template.category === "UTILITY")
+      .map((template) => {
+        const record = findTemplateRecord(records, template.name, template.language);
+        return {
+          ...runtimePublicTemplate(template, CONFIGURED_UTILITY_LABELS[template.key]),
+          id: template.key,
+          approvalStatus: record?.status || "NOT_SYNCED",
+          approved: record?.status === "APPROVED",
+          rejectedReason: record?.rejectedReason || null,
+          dynamic: false
+        };
+      });
+    const configuredNames = new Set(Object.values(this.templates)
+      .filter((template) => template.category === "UTILITY")
+      .map((template) => `${normalize(template.name)}:${languageBase(template.language)}`));
+    const dynamic = records
+      .filter((record) => record.orgId === orgId)
+      .filter((record) => normalize(record.category) === "utility" && normalize(record.status) === "approved")
+      .filter((record) => !configuredNames.has(`${normalize(record.name)}:${languageBase(record.language)}`))
+      .map(runtimeTemplateFromRecord)
+      .filter(Boolean)
+      .map((template) => ({
+        ...runtimePublicTemplate(template),
+        id: template.key,
+        approvalStatus: "APPROVED",
+        approved: true,
+        rejectedReason: null,
+        dynamic: true
+      }));
+    return [...configured, ...dynamic];
+  }
+
+  /** Resolves only configured or Meta-approved Utility templates. */
+  async resolveApprovedUtility(orgId, templateKey) {
+    if (!String(templateKey || "").startsWith(DYNAMIC_UTILITY_PREFIX)) {
+      const configured = this.resolve(templateKey, "UTILITY");
+      const registry = await this.assertApproved(orgId, configured);
+      return { template: configured, registry };
+    }
+    const recordId = String(templateKey).slice(DYNAMIC_UTILITY_PREFIX.length);
+    const record = await this.store.get(COLLECTIONS.templateRegistry, recordId);
+    if (!record || record.orgId !== orgId) throw new ConflictError("Select a synced WhatsApp Utility template");
+    if (normalize(record.category) !== "utility") throw new ConflictError("Selected template is not a Meta Utility template");
+    if (normalize(record.status) !== "approved") {
+      throw new ConflictError(`Meta template ${record.name || "selected template"} is ${record.status || "UNKNOWN"}`);
+    }
+    const template = runtimeTemplateFromRecord({ ...record, id: recordId });
+    if (!template) throw new ConflictError("Selected Meta Utility template has no usable body");
+    return { template, registry: record };
   }
 
   resolve(templateKey, expectedCategory = null) {
@@ -250,6 +321,82 @@ function publicTemplate(template) {
     variables: template.variables,
     header: template.header || null
   };
+}
+
+function runtimePublicTemplate(template, label = null) {
+  return {
+    name: template.name,
+    label: label || title(template.name),
+    description: template.body,
+    body: template.body,
+    category: template.category,
+    languageCode: template.language,
+    eventType: template.eventType || "GENERIC_UTILITY_UPDATE",
+    variables: template.variables,
+    header: template.header || null
+  };
+}
+
+function runtimeTemplateFromRecord(record) {
+  const components = parseComponents(record.componentsJson);
+  const body = components.find((component) => normalize(component?.type) === "body");
+  const bodyText = String(body?.text || "").trim();
+  if (!bodyText) return null;
+  const headerComponent = components.find((component) => normalize(component?.type) === "header");
+  const headerType = String(headerComponent?.format || "").toUpperCase();
+  const mediaHeader = ["IMAGE", "VIDEO", "DOCUMENT"].includes(headerType)
+    ? Object.freeze({ type: headerType, required: true })
+    : null;
+  const bodyVariables = componentVariables(bodyText, "body");
+  const headerVariables = headerType === "TEXT"
+    ? componentVariables(String(headerComponent?.text || ""), "header")
+    : [];
+  return Object.freeze({
+    key: `${DYNAMIC_UTILITY_PREFIX}${record.id}`,
+    name: String(record.name || ""),
+    language: String(record.language || "en"),
+    category: "UTILITY",
+    eventType: "GENERIC_UTILITY_UPDATE",
+    body: bodyText,
+    headerText: headerType === "TEXT" ? String(headerComponent?.text || "") : null,
+    header: mediaHeader,
+    variables: Object.freeze([...headerVariables, ...bodyVariables].map(Object.freeze))
+  });
+}
+
+function componentVariables(text, component) {
+  const tokens = [...String(text || "").matchAll(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*|\d+)\s*\}\}/g)]
+    .map((match) => match[1]);
+  return [...new Set(tokens)].map((token) => {
+    const named = !/^\d+$/.test(token);
+    return {
+      key: named
+        ? (component === "header" ? `header_${token}` : token)
+        : (component === "header" ? `header_variable_${token}` : `variable_${token}`),
+      label: named ? title(token) : `${component === "header" ? "Header variable" : "Variable"} ${token}`,
+      component,
+      token,
+      named
+    };
+  });
+}
+
+function parseComponents(value) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function findTemplateRecord(records, name, language) {
+  const sameName = records.filter((record) => normalize(record.name) === normalize(name));
+  return findLanguageMatch(sameName, language);
+}
+
+function title(value) {
+  return String(value || "").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function configuredTemplateStatus(templates, remoteTemplates) {

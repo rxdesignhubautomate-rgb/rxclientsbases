@@ -1,7 +1,6 @@
 import express from 'express';
 import { sendData } from '../utils/http.js';
 import { assertPermission } from '../services/marketing-safety.service.js';
-import { prepareMarketingHistory } from '../services/marketing-history-preparation.js';
 
 export function marketingWorkspaceRoutes(service) {
   const router = express.Router(), wrap = fn => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
@@ -9,8 +8,7 @@ export function marketingWorkspaceRoutes(service) {
     assertPermission(req.auth, 'marketing.read');
     return sendData(res, { enabled: true, settings: await service.safety.settings(req.auth.orgId), dispatchConfigured: service.safety.dispatchEnabled, templates: service.templateRegistry.listConfigured().filter(t => t.category === 'MARKETING'), actorId: req.auth.userId });
   }));
-  router.patch('/settings', wrap(async (req, res) => sendData(res, await service.safety.setEnabled(req.auth, req.body.enabled, req.body.reason, { directActivation: req.body.directActivation ?? false }))));
-  router.post('/history/prepare', wrap(async (req, res) => sendData(res, await prepareMarketingHistory(service, req.auth))));
+  router.patch('/settings', wrap(async (req, res) => sendData(res, await service.safety.setEnabled(req.auth, req.body.enabled, req.body.reason))));
   router.put('/rollout', wrap(async (req, res) => sendData(res, await service.safety.configureRollout(req.auth, req.body))));
   router.get('/overview', wrap(async (req, res) => sendData(res, await service.overview(req.auth))));
   router.get('/lookup', wrap(async (req, res) => sendData(res, await service.clients.lookup(req.auth, req.query))));
@@ -46,8 +44,6 @@ export function marketingWorkspaceRoutes(service) {
   router.post('/replies/:id/review', wrap(async (req, res) => sendData(res, await service.reviewReply(req.auth, req.params.id, req.body))));
   router.get('/replies', wrap(async (req, res) => sendData(res, await service.replies(req.auth, req.query))));
   router.post('/messages/:id/reconcile', wrap(async (req, res) => sendData(res, await service.reconcileUnknown(req.auth, req.params.id, req.body))));
-  router.get('/messages/unresolved', wrap(async (req, res) => sendData(res, await service.unresolvedMessages(req.auth))));
-  router.post('/messages/:id/history-review', wrap(async (req, res) => sendData(res, await service.resolveHistoryReview(req.auth, req.params.id, req.body))));
   router.get('/rules', wrap(async (req, res) => sendData(res, await service.rules(req.auth))));
   router.put('/rules', wrap(async (req, res) => sendData(res, await service.rules(req.auth, req.body))));
   router.post('/events', wrap(async (req, res) => sendData(res, await service.businessEvent(req.auth, req.body))));

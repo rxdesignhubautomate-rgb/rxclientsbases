@@ -1,4 +1,3 @@
-import { businessOptedIn } from './business-opt-in-policy.js';
 import { assertInboxAccess } from "./inbox-access.js";
 import { COLLECTIONS } from "../config/constants.js";
 import { getWhatsAppTemplate } from "../config/whatsapp-templates.js";
@@ -52,12 +51,24 @@ export class SmartMessageService {
    * Makes one audited policy decision and queues an outbound message through the existing durable outbox.
    */
   async smartSend(orgId, input, actor = {}) {
+    let resolvedUtility = null;
+    if (input.requestedMode === MESSAGE_MODES.UTILITY && input.templateKey) {
+      resolvedUtility = await this.templateRegistry.resolveApprovedUtility(orgId, input.templateKey);
+      if (resolvedUtility.template.key.startsWith("meta:")) {
+        input = {
+          ...input,
+          eventType: "GENERIC_UTILITY_UPDATE",
+          runtimeUtilityTemplate: resolvedUtility.template
+        };
+      }
+    }
     let evaluated = await this.decide(orgId, input, actor);
     let { decision } = evaluated;
     let approvedTemplate = null;
     if (decision.allowed && decision.requiresTemplate) {
       try {
-        approvedTemplate = await this.templateRegistry.assertApproved(orgId, decision.templateKey);
+        approvedTemplate = resolvedUtility?.registry
+          || await this.templateRegistry.assertApproved(orgId, decision.templateKey);
       } catch (error) {
         decision = blockedDecision(decision, `TEMPLATE_NOT_APPROVED:${error.message}`);
         evaluated = { ...evaluated, decision };
@@ -168,10 +179,7 @@ export class SmartMessageService {
       status: contact.status,
       suppressed: contact.suppressed === true || contact.status === "BLOCKED",
       marketingConsent: contact.marketingConsent || null,
-      marketingOptIn: businessOptedIn(contact),
-      optInStatus: contact.optInStatus,
-      doNotMarket: contact.doNotMarket === true,
-      stopAllCommunications: contact.stopAllCommunications === true,
+      marketingOptIn: contact.marketingOptIn === true || contact.marketingConsent?.status === "OPTED_IN",
       marketingOptOut: contact.marketingOptOut === true || contact.marketingConsent?.status === "OPTED_OUT",
       lastUserMessageAt: conversation?.lastInboundAt || lead?.lastUserMessageAt || contact.lastUserMessageAt || null,
       serviceWindowExpiresAt: conversation ? null : (lead?.serviceWindowExpiresAt || contact.serviceWindowExpiresAt || null),
@@ -273,7 +281,10 @@ export class SmartMessageService {
         metadata: input.messageMetadata || input.metadata || {}
       };
     }
-    if (decision.mode === MESSAGE_MODES.UTILITY) return this.utilityTemplates.prepare(decision.templateKey, templateData);
+    if (decision.mode === MESSAGE_MODES.UTILITY) {
+      if (input.runtimeUtilityTemplate) return prepareRuntimeUtility(input.runtimeUtilityTemplate, templateData);
+      return this.utilityTemplates.prepare(decision.templateKey, templateData);
+    }
     if (decision.mode === MESSAGE_MODES.MARKETING) return this.marketingTemplates.prepare(decision.templateKey, templateData);
     throw new ConflictError("Message policy blocked this send");
   }
@@ -386,6 +397,49 @@ export class SmartMessageService {
     await this.store.update(COLLECTIONS.contacts, context.contact.contactId, { lastMessageDecision: value, updatedAt: now() });
     if (context.lead?.leadId) await this.store.update(COLLECTIONS.leads, context.lead.leadId, { lastMessageDecision: value, updatedAt: now() });
   }
+}
+
+function prepareRuntimeUtility(template, values = {}) {
+  const normalized = {};
+  for (const field of template.variables || []) {
+    const value = String(values[field.key] ?? "").replace(/\s+/g, " ").trim();
+    if (!value) throw new ConflictError(`${field.label} is required`);
+    if (value.length > 500) throw new ConflictError(`${field.label} is too long`);
+    normalized[field.key] = value;
+  }
+  const parametersFor = (component) => (template.variables || [])
+    .filter((field) => (field.component || "body") === component)
+    .map((field) => ({
+      type: "text",
+      ...(field.named ? { parameter_name: field.token } : {}),
+      text: normalized[field.key]
+    }));
+  const bodyParameters = parametersFor("body");
+  const headerParameters = parametersFor("header");
+  const render = (text, fields) => fields.reduce(
+    (output, field) => output.replaceAll(`{{${field.token}}}`, normalized[field.key]),
+    text
+  );
+  const bodyFields = (template.variables || []).filter((field) => (field.component || "body") === "body");
+  return {
+    text: render(template.body, bodyFields),
+    type: "TEMPLATE",
+    metadata: {
+      utilityTemplateId: template.key,
+      templateKey: template.key,
+      templateCategory: "UTILITY",
+      templateValues: normalized,
+      templateHeader: template.header || null,
+      template: {
+        name: template.name,
+        language: { code: template.language },
+        components: [
+          ...(headerParameters.length ? [{ type: "header", parameters: headerParameters }] : []),
+          ...(bodyParameters.length ? [{ type: "body", parameters: bodyParameters }] : [])
+        ]
+      }
+    }
+  };
 }
 
 function useProviderTemplateLanguage(prepared, approvedTemplate) {

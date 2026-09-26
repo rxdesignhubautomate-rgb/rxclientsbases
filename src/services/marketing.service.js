@@ -1,4 +1,3 @@
-import { businessOptedIn } from './business-opt-in-policy.js';
 import { COLLECTIONS } from "../config/constants.js";
 import { createId } from "../utils/ids.js";
 import { now, toDate } from "../utils/dates.js";
@@ -123,7 +122,7 @@ export class MarketingService {
       }
     }
     if (input.repeatMarketing === true) {
-      if (!businessOptedIn(contact)) {
+      if (contact.marketingConsent?.status !== "OPTED_IN") {
         throw new ConflictError("Record WhatsApp marketing opt-in before adding this customer to repeat marketing");
       }
     }
@@ -286,7 +285,7 @@ export class MarketingService {
     const contacts = result.items
       .filter((contact) => relationshipTypes.includes(contact.relationshipType || "PROSPECT"))
       .filter((contact) => contact.status === "ACTIVE")
-      .filter((contact) => !input.onlyOptedIn || businessOptedIn(contact))
+      .filter((contact) => !input.onlyOptedIn || contact.marketingConsent?.status === "OPTED_IN" || contact.marketingOptIn === true)
       .sort((left, right) => String(left.contactId || left.id).localeCompare(String(right.contactId || right.id)));
     if (!contacts.length) throw new ConflictError(`No active ${relationshipType === "EXISTING_CLIENT" ? "existing clients" : "prospects"} were found`);
     const batchSize = Math.min(Number(input.batchSize) || MAX_RECIPIENTS_PER_BATCH, MAX_RECIPIENTS_PER_BATCH);
@@ -777,28 +776,6 @@ export class MarketingService {
     return this.getCampaign(orgId, campaignId);
   }
 
-  // One-off recovery for outbox rows dead-lettered by a bug that is now fixed
-  // (e.g. a sender identity that had no matching, permissioned user record).
-  // Resets them to PENDING so the existing outbound worker picks them up on
-  // its normal poll cycle -- does not touch campaign/enrollment state at all.
-  async retryFailedOutbox(orgId, campaignId, actor = {}) {
-    assertPermission(actor, 'marketing.send');
-    await this.getCampaign(orgId, campaignId, { actor });
-    const failed = await this.store.find(COLLECTIONS.outbox, { filters: [['orgId', '==', orgId], ['campaignId', '==', campaignId], ['status', '==', 'FAILED']], limit: 500 });
-    let retried = 0;
-    for (const record of failed.items) {
-      const id = record.outboxId || record.id;
-      await this.store.runTransaction(async tx => {
-        const current = await tx.get(COLLECTIONS.outbox, id);
-        if (current?.status !== 'FAILED') return;
-        tx.update(COLLECTIONS.outbox, id, { status: 'PENDING', attemptCount: 0, nextAttemptAt: now(), lockedAt: null, lockedBy: null, lastError: null, updatedAt: now() });
-        tx.update(COLLECTIONS.messages, current.messageId, { status: 'QUEUED', errorCode: null, errorMessage: null, updatedAt: now() });
-      });
-      retried += 1;
-    }
-    await this.audit.write({ orgId, actorId: actor.userId || 'SYSTEM', action: 'MARKETING_OUTBOX_RETRIED', entityType: 'MARKETING_CAMPAIGN', entityId: campaignId, metadata: { retried } });
-    return { campaignId, retried, remaining: failed.items.length - retried };
-  }
   async pauseCampaign(orgId, campaignId, actor = {}) {
     const campaign = await this.getCampaign(orgId, campaignId, { actor });
     if (!RUNNING_CAMPAIGN_STATUSES.has(campaign.status)) throw new ConflictError("Only an active campaign can be paused");
@@ -1321,7 +1298,7 @@ function eligibilityReason(contact) {
   if (contact.suppressed === true) return contact.marketingOptOut === true ? "OPTED_OUT" : "SUPPRESSED";
   if (contact.marketingConsent?.status === "OPTED_OUT") return "OPTED_OUT";
   if (contact.marketingOptOut === true) return "OPTED_OUT";
-  if (!businessOptedIn(contact)) return "OPTED_OUT";
+  if (contact.marketingConsent?.status !== "OPTED_IN" && contact.marketingOptIn !== true) return "OPT_IN_NOT_RECORDED";
   return null;
 }
 

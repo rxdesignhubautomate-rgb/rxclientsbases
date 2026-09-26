@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { businessOptedIn } from './business-opt-in-policy.js';
 import { sha256 } from '../utils/hashing.js';
 import { ConflictError, ForbiddenError } from '../utils/errors.js';
 import { activityOf, inspectDestination, timestampMs } from './client-classification.js';
@@ -73,10 +72,8 @@ export class MarketingSafetyService {
     return this.settings(actor.orgId);
   }
 
-  async setEnabled(actor, enabled, reason, { directActivation = false } = {}) {
+  async setEnabled(actor, enabled, reason) {
     assertPermission(actor, 'marketing.settings');
-    if (typeof directActivation !== 'boolean') throw new ConflictError('Direct activation must be a boolean');
-    if (directActivation && !['OWNER', 'ADMIN'].includes(actor.role)) throw new ForbiddenError('Direct activation requires an owner or administrator');
     if (typeof enabled !== 'boolean' || String(reason || '').trim().length < 5) throw new ConflictError('A reason and boolean enabled state are required');
     if (enabled && !this.dispatchEnabled) throw new ConflictError('Deployment activation is disabled; use development previews first');
     if (enabled) {
@@ -85,14 +82,13 @@ export class MarketingSafetyService {
       if (total !== prepared) throw new ConflictError('Complete and reconcile the legacy destination-suppression backfill before activating marketing');
       const history = await this.store.get('systemSettings', `marketing-history-${actor.orgId}`);
       if (history?.orgId !== actor.orgId || !history.ready || this.clock() - timestampMs(history.preparedAt) > 86400000) throw new ConflictError('Reconcile accepted and uncertain legacy marketing history before activation');
-      if (!directActivation && !(await this.settings(actor.orgId)).rolloutStage) throw new ConflictError('Configure the reviewed internal-test allowlist before activation');
+      if (!(await this.settings(actor.orgId)).rolloutStage) throw new ConflictError('Configure the reviewed internal-test allowlist before activation');
     }
     await this.store.runTransaction(async tx => {
       const id = `marketing-safety-${actor.orgId}`, old = await tx.get('systemSettings', id);
       const version = (old?.version || 0) + 1;
-      const direct = enabled && directActivation;
-      tx.set('systemSettings', id, { ...old, ...(direct ? { rolloutStage: 'FULL', allowedDestinations: [], activationMode: 'ADMIN_DIRECT', directActivationBy: actor.userId, directActivationAt: new Date(this.clock()) } : {}), orgId: actor.orgId, enabled, consecutiveFailures: 0, version, reason, updatedBy: actor.userId, updatedAt: new Date(this.clock()) });
-      tx.create('auditLogs', sha256(`${id}:${version}`), { orgId: actor.orgId, actorId: actor.userId, action: direct ? 'MARKETING_DIRECT_ACTIVATION' : enabled ? 'MARKETING_ENABLED' : 'MARKETING_KILL_SWITCH', entityId: id, metadata: { reason, directActivation: direct }, createdAt: new Date(this.clock()) });
+      tx.set('systemSettings', id, { ...old, orgId: actor.orgId, enabled, consecutiveFailures: 0, version, reason, updatedBy: actor.userId, updatedAt: new Date(this.clock()) });
+      tx.create('auditLogs', sha256(`${id}:${version}`), { orgId: actor.orgId, actorId: actor.userId, action: enabled ? 'MARKETING_ENABLED' : 'MARKETING_KILL_SWITCH', entityId: id, metadata: { reason }, createdAt: new Date(this.clock()) });
     });
     return this.settings(actor.orgId);
   }
@@ -105,8 +101,8 @@ export class MarketingSafetyService {
     const companies = await this.store.getMany('contacts', contact.crmCompanyIds || []);
     const blockedCompany = companies.some(c => c.orgId !== orgId || c.doNotMarket || c.stopAllCommunications || c.status === 'BLOCKED') || companies.length !== (contact.crmCompanyIds || []).length;
     const reason = this.permissionReason(contact, permission, state, blockedCompany);
-    return { e164, destinationKey: key, state: state?.marketingSuppressed || state?.stopAll ? 'suppressed' : permission?.state || (!reason ? 'granted' : 'unknown'), version: permission?.version || 0,
-      source: permission?.source || (!reason ? 'BUSINESS_OPT_IN_POLICY' : null), obtainedAt: permission?.obtainedAt || null, eligible: !reason, reason, lastAcceptedAt: state?.lastAcceptedAt || null };
+    return { e164, destinationKey: key, state: state?.marketingSuppressed || state?.stopAll ? 'suppressed' : permission?.state || 'unknown', version: permission?.version || 0,
+      source: permission?.source || null, obtainedAt: permission?.obtainedAt || null, eligible: !reason, reason, lastAcceptedAt: state?.lastAcceptedAt || null };
   }
 
   async inspectMany(orgId, contacts) {
@@ -124,17 +120,15 @@ export class MarketingSafetyService {
       const key = destinationKey(orgId, e164), permission = permissionMap.get(key), state = stateMap.get(key);
       const companyBlocked = (contact.crmCompanyIds || []).some(id => { const c = companyMap.get(id); return !c || c.orgId !== orgId || c.doNotMarket || c.stopAllCommunications || c.status === 'BLOCKED'; });
       const reason = this.permissionReason(contact, permission, state, companyBlocked);
-      return { e164, destinationKey: key, state: state?.reviewRequired ? 'needs_review' : state?.marketingSuppressed || state?.stopAll ? 'suppressed' : permission?.state || (!reason ? 'granted' : 'unknown'), version: permission?.version || 0, eligible: !reason, reason, source: permission?.source || (!reason ? 'BUSINESS_OPT_IN_POLICY' : null), obtainedAt: permission?.obtainedAt || null, lastAcceptedAt: state?.lastAcceptedAt || null };
+      return { e164, destinationKey: key, state: state?.reviewRequired ? 'needs_review' : state?.marketingSuppressed || state?.stopAll ? 'suppressed' : permission?.state || 'unknown', version: permission?.version || 0, eligible: !reason, reason, source: permission?.source || null, obtainedAt: permission?.obtainedAt || null, lastAcceptedAt: state?.lastAcceptedAt || null };
     });
   }
 
   permissionReason(contact, permission, state, companyBlocked = false) {
     if (state?.reviewRequired) return 'RECIPIENT_REQUEST_NEEDS_REVIEW';
-    if (contact.suppressed || contact.doNotMarket || contact.stopAllCommunications || contact.status === 'BLOCKED' || companyBlocked || state?.stopAll || state?.marketingSuppressed) return 'SUPPRESSED';
+    if (contact.doNotMarket || contact.stopAllCommunications || contact.status === 'BLOCKED' || companyBlocked || state?.stopAll || state?.marketingSuppressed) return 'SUPPRESSED';
     const legacyStop = contact.marketingOptOut || contact.marketingConsent?.status === 'OPTED_OUT' || contact.optInStatus === 'OPTED_OUT';
     if (legacyStop && !permission?.restoresOptOut) return 'LEGACY_OPT_OUT_REQUIRES_FRESH_EVIDENCE';
-    if (permission?.state === 'revoked') return 'SUPPRESSED';
-    if (!permission && businessOptedIn(contact)) return null;
     if (permission?.orgId !== contact.orgId || permission?.state !== 'granted' || permission.purpose !== 'marketing' || permission.channel !== 'WHATSAPP' || !permission.evidenceReference) return 'PERMISSION_UNKNOWN';
     if ((timestampMs(permission.obtainedAt) ?? Infinity) > this.clock()) return 'INVALID_PERMISSION_DATE';
     return null;

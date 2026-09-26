@@ -1,6 +1,6 @@
 {
   "name": "rx-communication-crm",
-  "version": "2.18.0-dev.3",
+  "version": "2.18.0-dev.4",
   "private": true,
   "description": "Channel-independent customer communication and business operations platform for RX Design Hub",
   "type": "module",

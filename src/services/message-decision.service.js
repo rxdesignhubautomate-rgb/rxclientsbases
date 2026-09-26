@@ -1,4 +1,3 @@
-import { businessOptedIn } from './business-opt-in-policy.js';
 import { getWhatsAppTemplate, getWhatsAppTemplateRegistry } from "../config/whatsapp-templates.js";
 import { toDate } from "../utils/dates.js";
 import { normalizePhone } from "../utils/phone.js";
@@ -14,7 +13,8 @@ export const UTILITY_EVENT_REQUIREMENTS = Object.freeze({
   ORDER_CONFIRMATION: Object.freeze(["orderId"]),
   DESIGN_APPROVED: Object.freeze(["orderId"]),
   READY_TO_DISPATCH: Object.freeze(["orderId"]),
-  EXPERIENCE_FEEDBACK: Object.freeze(["orderId"])
+  EXPERIENCE_FEEDBACK: Object.freeze(["orderId"]),
+  GENERIC_UTILITY_UPDATE: Object.freeze(["orderId"])
 });
 
 const PROMOTIONAL_SIGNALS = /\b(discount|offer|sale|promotion|promo|new product|sample|festival|reactivat|re-engag|upsell|cross[- ]?sell|buy now|special price|limited time|follow[- ]?up)\b/i;
@@ -98,10 +98,13 @@ function requiredValue(input, field) {
 }
 
 function marketingOptedIn(lead) {
-  return businessOptedIn(lead);
+  return lead.marketingOptIn === true || lead.marketingConsent?.status === "OPTED_IN";
 }
 
 function utilityTemplateKey(templateKey, eventType) {
+  // Dynamic templates are injected only by SmartMessageService after it has
+  // verified the durable Meta registry record is APPROVED and UTILITY.
+  if (templateKey && String(templateKey).startsWith("meta:")) return templateKey;
   if (templateKey) {
     const selected = getWhatsAppTemplate(templateKey);
     return selected?.category === "UTILITY" && (!selected.eventType || selected.eventType === eventType)

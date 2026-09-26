@@ -214,7 +214,7 @@ export function createControllers(container) {
         const conversation = await c.conversations.get(org(req), req.params.conversationId);
         await checkAssigned(req, conversation);
         if (req.body.type === "TEMPLATE") {
-          const template = c.templateRegistry.resolve(req.body.utilityTemplateId, "UTILITY");
+          const { template } = await c.templateRegistry.resolveApprovedUtility(org(req), req.body.utilityTemplateId);
           if (template.key === "order_confirmation") {
             const contact = await c.contacts.get(org(req), conversation.contactId);
             if (contact.relationshipType !== "EXISTING_CLIENT") {
@@ -303,15 +303,7 @@ export function createControllers(container) {
     },
     whatsapp: {
       utilityTemplates: wrap(async (req, res) => {
-        const templates = await Promise.all(c.utilityTemplates.list().map(async (template) => {
-          const registry = await c.templateRegistry.getStatus(org(req), template.name, template.languageCode);
-          return {
-            ...template,
-            approvalStatus: registry?.status || "NOT_SYNCED",
-            approved: registry?.status === "APPROVED",
-            rejectedReason: registry?.rejectedReason || null
-          };
-        }));
+        const templates = await c.templateRegistry.listApprovedUtilityTemplates(org(req));
         return sendData(res, templates);
       }),
       capabilities: wrap(async (req, res) => {
@@ -408,8 +400,7 @@ export function createControllers(container) {
       getCampaign: wrap(async (req, res) => sendData(res, await c.marketing.getCampaign(org(req), req.params.campaignId, { includeEnrollments: true, actor: actor(req) }))),
       launchCampaign: wrap(async (req, res) => sendData(res, await c.marketing.launchCampaign(org(req), req.params.campaignId, req.body, actor(req)), 202)),
       pauseCampaign: wrap(async (req, res) => sendData(res, await c.marketing.pauseCampaign(org(req), req.params.campaignId, actor(req)))),
-      resumeCampaign: wrap(async (req, res) => sendData(res, await c.marketing.resumeCampaign(org(req), req.params.campaignId, actor(req)))),
-      retryFailedOutbox: wrap(async (req, res) => sendData(res, await c.marketing.retryFailedOutbox(org(req), req.params.campaignId, actor(req))))
+      resumeCampaign: wrap(async (req, res) => sendData(res, await c.marketing.resumeCampaign(org(req), req.params.campaignId, actor(req))))
     },
     leads: resourceController(c, "leads", scopedOptions, checkAssigned),
     quotations: {

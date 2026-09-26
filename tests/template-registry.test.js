@@ -231,4 +231,66 @@ describe("Meta template registry", () => {
       status: 424
     });
   });
+
+  it("lists newly added approved Meta Utility templates without exposing Marketing or pending templates", async () => {
+    const store = new MemoryStore();
+    const service = new TemplateRegistryService({
+      store,
+      businessAccountId: "123456789012345",
+      whatsappAdapter: {
+        listMessageTemplates: async () => [
+          {
+            id: "T-UTILITY-NEW",
+            name: "payment_received_update",
+            language: "en_US",
+            category: "UTILITY",
+            status: "APPROVED",
+            components: [{ type: "BODY", text: "Hello {{1}}, payment for order {{2}} was received." }]
+          },
+          {
+            id: "T-UTILITY-PENDING",
+            name: "dispatch_eta_update",
+            language: "en",
+            category: "UTILITY",
+            status: "PENDING",
+            components: [{ type: "BODY", text: "Order {{1}} is being prepared." }]
+          },
+          {
+            id: "T-MARKETING",
+            name: "special_offer",
+            language: "en",
+            category: "MARKETING",
+            status: "APPROVED",
+            components: [{ type: "BODY", text: "Special offer for {{1}}" }]
+          }
+        ]
+      }
+    });
+
+    await service.syncFromMeta("RXDH").catch(() => {});
+    const templates = await service.listApprovedUtilityTemplates("RXDH");
+    const dynamic = templates.find((template) => template.name === "payment_received_update");
+
+    expect(dynamic).toMatchObject({
+      label: "Payment Received Update",
+      approved: true,
+      dynamic: true,
+      category: "UTILITY",
+      languageCode: "en_US",
+      variables: [
+        { key: "variable_1", label: "Variable 1", component: "body", token: "1", named: false },
+        { key: "variable_2", label: "Variable 2", component: "body", token: "2", named: false }
+      ]
+    });
+    expect(templates.some((template) => template.name === "dispatch_eta_update")).toBe(false);
+    expect(templates.some((template) => template.name === "special_offer")).toBe(false);
+
+    await expect(service.resolveApprovedUtility("RXDH", dynamic.id)).resolves.toMatchObject({
+      template: {
+        name: "payment_received_update",
+        category: "UTILITY",
+        eventType: "GENERIC_UTILITY_UPDATE"
+      }
+    });
+  });
 });
