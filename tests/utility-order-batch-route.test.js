@@ -35,6 +35,10 @@ function testApp(options = {}) {
     },
     store: {
       getMany: vi.fn().mockResolvedValue(orders),
+      get: vi.fn().mockImplementation(async (collection) => collection === "contactPhoneKeys" && options.phoneMatchContactId
+        ? { orgId: "RXDH", contactId: options.phoneMatchContactId }
+        : null),
+      update: vi.fn().mockResolvedValue(null),
       find: vi.fn().mockImplementation(async (collection) => ({
         items: collection === "contacts"
           ? [
@@ -63,7 +67,7 @@ function testApp(options = {}) {
   });
   app.use("/", messagePolicyRoutes(container));
   app.use(errorHandler);
-  return { app, smartSend };
+  return { app, smartSend, store: container.store };
 }
 
 describe("verified order Utility batch route", () => {
@@ -183,6 +187,35 @@ describe("verified order Utility batch route", () => {
         variable_3: "CONFIRMED"
       },
       idempotencyKey: "UTILITY:meta:TPL_NEW:ORD_1001"
+    }), expect.any(Object));
+  });
+
+  it("auto-links an unlinked active order by its unique phone before Utility sending", async () => {
+    const orders = [{
+      orderId: "ORD_UNLINKED",
+      orgId: "RXDH",
+      contactId: null,
+      customerPhone: "9876500101",
+      orderNumber: "UNLINKED-1",
+      status: "CONFIRMED"
+    }];
+    const { app, smartSend, store } = testApp({ orders, phoneMatchContactId: "CON_1001" });
+    const response = await request(app).post("/events/utility/batch").send({
+      orderIds: ["ORD_UNLINKED"],
+      templateKey: "meta:TPL_NEW",
+      variableValues: { customer_name: "{{customer_name}}", variable_2: "{{order_reference}}", variable_3: "{{order_status}}" },
+      confirmTransactionalUse: true
+    });
+
+    expect(response.status).toBe(202);
+    expect(response.body.data).toMatchObject({ requested: 1, queued: 1, skipped: 0, failed: 0 });
+    expect(store.update).toHaveBeenCalledWith("orders", "ORD_UNLINKED", expect.objectContaining({
+      contactId: "CON_1001",
+      utilityAutoLinkedBy: "PHONE"
+    }));
+    expect(smartSend).toHaveBeenCalledWith("RXDH", expect.objectContaining({
+      contactId: "CON_1001",
+      orderId: "ORD_UNLINKED"
     }), expect.any(Object));
   });
 });

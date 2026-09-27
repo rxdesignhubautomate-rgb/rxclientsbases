@@ -4,6 +4,7 @@ import { validate } from "../middleware/validate.js";
 import { sendData, sendList } from "../utils/http.js";
 import { decodeCursor, listQuery } from "../utils/pagination.js";
 import { normalizePhone } from "../utils/phone.js";
+import { sha256 } from "../utils/hashing.js";
 import { validateTemplateHeaderMedia } from "../services/template-header-media.js";
 import { COLLECTIONS } from "../config/constants.js";
 import { ConflictError } from "../utils/errors.js";
@@ -319,11 +320,11 @@ async function sendUtilityBatch(container, req, template, templateAttachmentIds)
       try {
         const order = orderById.get(orderId);
         if (!order || order.orgId !== req.auth.orgId) return batchResult(orderId, "SKIPPED", "ORDER_NOT_FOUND");
-        if (!order.contactId) return batchResult(orderId, "SKIPPED", "ORDER_HAS_NO_LINKED_CLIENT");
         if (TERMINAL_ORDER_STATUSES.has(String(order.status || "").toUpperCase())) {
           return batchResult(orderId, "SKIPPED", `ORDER_STATUS_${String(order.status).toUpperCase()}`);
         }
-        const contact = await container.contacts.get(req.auth.orgId, order.contactId);
+        const contact = await resolveUtilityOrderContact(container, req.auth.orgId, order);
+        if (!contact) return batchResult(orderId, "SKIPPED", "ORDER_CLIENT_MATCH_NOT_FOUND");
         if (contact.relationshipType !== "EXISTING_CLIENT") return batchResult(orderId, "SKIPPED", "NOT_EXISTING_CLIENT", contact);
         const historyReason = history.get(orderId);
         if (historyReason) return batchResult(orderId, "SKIPPED", historyReason, contact);
@@ -396,6 +397,37 @@ function utilityTemplateData(template, contact, order, supplied = {}) {
     values[field.key] = value;
     return values;
   }, {});
+}
+
+async function resolveUtilityOrderContact(container, orgId, order) {
+  if (order.contactId) return container.contacts.get(orgId, order.contactId);
+  const rawPhone = order.customerPhone || order.primaryPhone || order.phone || order.mobile || order.mobileNumber || order.number;
+  const phone = normalizePhone(rawPhone);
+  let contactId = null;
+  let matchedBy = null;
+  if (phone) {
+    const phoneKey = await container.store.get(COLLECTIONS.contactPhoneKeys, sha256(`${orgId}:PHONE:${phone}`));
+    contactId = phoneKey?.orgId === orgId ? phoneKey.contactId : null;
+    matchedBy = contactId ? "PHONE" : null;
+  }
+  if (!contactId) {
+    const companyName = String(order.partyName || order.customerName || order.companyName || order.clientName || "").trim();
+    if (companyName) {
+      const normalizedName = companyName.toUpperCase().replace(/[^A-Z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+      const nameKey = await container.store.get(COLLECTIONS.contactNameKeys, sha256(`${orgId}:CONTACT_NAME:${normalizedName}`));
+      contactId = nameKey?.orgId === orgId ? nameKey.contactId : null;
+      matchedBy = contactId ? "EXACT_COMPANY_NAME" : null;
+    }
+  }
+  if (!contactId) return null;
+  const contact = await container.contacts.get(orgId, contactId);
+  await container.store.update(COLLECTIONS.orders, order.orderId || order.id, {
+    contactId,
+    utilityAutoLinkedBy: matchedBy,
+    utilityAutoLinkedAt: new Date()
+  });
+  order.contactId = contactId;
+  return contact;
 }
 
 function batchResult(orderId, status, reason = null, contact = null, messageId = null) {
