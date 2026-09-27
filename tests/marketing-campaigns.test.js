@@ -276,6 +276,7 @@ describe("WhatsApp marketing campaigns", () => {
         contactId,
         orgId: "RXDH",
         contactPerson: `Prospect ${index + 1}`,
+        primaryPhone: `91${String(7000000000 + index)}`,
         relationshipType: "PROSPECT",
         status: "ACTIVE",
         marketingConsent: { status: "OPTED_IN" },
@@ -323,6 +324,110 @@ describe("WhatsApp marketing campaigns", () => {
       role: "SALES",
       email: "reshu@rxdesignhub.com"
     })).rejects.toThrow(/another team member/);
+  });
+
+  it("filters previous, pending, uncertain, opted-out and duplicate recipients while keeping confirmed failures retryable", async () => {
+    const core = makeCore();
+    const marketing = makeMarketing(core);
+    const timestamp = new Date("2026-09-26T08:00:00.000Z");
+    const rows = [
+      ["CNT_A_ELIGIBLE", "9876500001", "OPTED_IN"],
+      ["CNT_B_DUPLICATE", "9876500001", "OPTED_IN"],
+      ["CNT_C_SENT", "9876500002", "OPTED_IN"],
+      ["CNT_D_QUEUED", "9876500003", "OPTED_IN"],
+      ["CNT_E_UNKNOWN", "9876500004", "OPTED_IN"],
+      ["CNT_F_FAILED", "9876500005", "OPTED_IN"],
+      ["CNT_G_OPTOUT", "9876500006", "OPTED_OUT"]
+    ];
+    for (const [contactId, primaryPhone, consent] of rows) {
+      await core.store.set("contacts", contactId, {
+        contactId,
+        orgId: "RXDH",
+        contactPerson: contactId,
+        primaryPhone,
+        relationshipType: "PROSPECT",
+        status: "ACTIVE",
+        marketingConsent: { status: consent },
+        marketingOptIn: consent === "OPTED_IN",
+        marketingOptOut: consent === "OPTED_OUT",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+    }
+    for (const [messageId, contactId, status, submissionState] of [
+      ["MSG_SENT_FILTER", "CNT_C_SENT", "SENT", "accepted"],
+      ["MSG_QUEUED_FILTER", "CNT_D_QUEUED", "QUEUED", "pending"],
+      ["MSG_UNKNOWN_FILTER", "CNT_E_UNKNOWN", "DELIVERY_UNKNOWN", "submission_unknown"],
+      ["MSG_FAILED_FILTER", "CNT_F_FAILED", "FAILED", "failed"]
+    ]) {
+      await core.store.set("messages", messageId, {
+        messageId,
+        orgId: "RXDH",
+        contactId,
+        direction: "OUTBOUND",
+        status,
+        submissionState,
+        metadata: { campaignId: "CAMPAIGN_OLD", templateCategory: "MARKETING" },
+        createdAt: timestamp
+      });
+    }
+
+    const result = await marketing.createSegmentBatches("RXDH", {
+      name: "Safe retry batch",
+      relationshipType: "PROSPECT",
+      batchSize: 500,
+      onlyOptedIn: true
+    }, { userId: "USR_ADMIN", role: "ADMIN" });
+
+    expect(result).toMatchObject({
+      scannedContacts: 7,
+      totalContacts: 2,
+      excludedContacts: 5,
+      exclusionCounts: {
+        DUPLICATE_NUMBER: 1,
+        ALREADY_SENT: 1,
+        QUEUED_OR_SENDING: 1,
+        DELIVERY_UNCERTAIN: 1,
+        OPTED_OUT: 1
+      }
+    });
+    expect(result.audiences[0].contactIds).toEqual(["CNT_A_ELIGIBLE", "CNT_F_FAILED"]);
+  });
+
+  it("rechecks recipient history when a campaign starts", async () => {
+    const core = makeCore();
+    const marketing = makeMarketing(core);
+    const first = await core.contacts.create("RXDH", { contactPerson: "Still eligible", primaryPhone: "9876500011" });
+    const second = await core.contacts.create("RXDH", { contactPerson: "Sent after audience", primaryPhone: "9876500012" });
+    for (const contact of [first, second]) {
+      await marketing.recordConsent("RXDH", contact.contactId, { status: "OPTED_IN", source: "PHONE", note: "Requested updates" });
+    }
+    const audience = await marketing.createAudience("RXDH", { name: "Recheck audience", contactIds: [first.contactId, second.contactId] });
+    const campaign = await marketing.createCampaign("RXDH", {
+      name: "Recheck campaign",
+      audienceId: audience.audienceId,
+      interestLabel: "catalogue",
+      templateId: "LEAD_REENGAGEMENT",
+      steps: [{ delayDays: 0, messageLine: "Latest catalogue" }]
+    });
+    await core.store.set("messages", "MSG_LATE_SENT", {
+      messageId: "MSG_LATE_SENT",
+      orgId: "RXDH",
+      contactId: second.contactId,
+      direction: "OUTBOUND",
+      status: "DELIVERED",
+      submissionState: "accepted",
+      metadata: { campaignId: "CAMPAIGN_OTHER", templateCategory: "MARKETING" },
+      createdAt: new Date()
+    });
+
+    const launched = await marketing.launchCampaign("RXDH", campaign.campaignId, {}, { userId: "USR_ADMIN", role: "ADMIN" });
+    expect(launched.stats).toMatchObject({ total: 2, eligible: 1, suppressed: 1 });
+    const details = await marketing.getCampaign("RXDH", campaign.campaignId, { includeEnrollments: true });
+    expect(details.enrollments.find((item) => item.contactId === second.contactId)).toMatchObject({
+      status: "SUPPRESSED",
+      suppressionReason: "ALREADY_SENT"
+    });
   });
 
   it("schedules direct existing-client campaigns only for recorded opt-ins", async () => {

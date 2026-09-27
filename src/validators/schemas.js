@@ -240,6 +240,14 @@ export const orderConfirmationBatchSchema = z.object({
   confirmTransactionalUse: z.literal(true)
 }).strict();
 
+export const utilityBatchSchema = z.object({
+  orderIds: z.array(id).min(1).max(50).transform((items) => [...new Set(items)]),
+  templateKey: z.string().trim().min(1).max(160),
+  templateAttachmentId: id.nullable().optional(),
+  variableValues: z.record(z.string().trim().max(500)).optional().default({}),
+  confirmTransactionalUse: z.literal(true)
+}).strict();
+
 export const orderUpdateEventSchema = z.object({
   ...eventBase,
   orderId: id

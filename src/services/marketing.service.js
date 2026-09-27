@@ -2,10 +2,11 @@ import { COLLECTIONS } from "../config/constants.js";
 import { createId } from "../utils/ids.js";
 import { now, toDate } from "../utils/dates.js";
 import { normalizePhone } from "../utils/phone.js";
+import { decodeCursor } from "../utils/pagination.js";
 import { ConflictError, NotFoundError } from "../utils/errors.js";
 import { customerServiceWindow } from "./conversation.service.js";
 import { qualifyingOrder } from "./client-classification.js";
-import { stopIntent, assertPermission } from './marketing-safety.service.js';
+import { stopIntent, assertPermission, canonicalDestination, destinationKey } from './marketing-safety.service.js';
 import {
   canAccessRelationship,
   CLIENT_SCOPES,
@@ -24,6 +25,8 @@ const MAX_RECIPIENTS_PER_BATCH = 500;
 // and cannot guarantee acceptance; the reviewed workspace has its own 500 maximum.
 const DAILY_MARKETING_BATCH_SIZE = 220;
 const MAX_SEGMENT_CONTACTS = 50000;
+const MAX_RECIPIENT_HISTORY_ROWS = 100000;
+const IN_FLIGHT_ENROLLMENT_STATUSES = new Set(["ACTIVE", "PROCESSING", "WAITING_FOR_WINDOW", "PAUSED", "PAUSED_REPLIED", "SNAPSHOT_READY", "QUEUED"]);
 const TEMPERATURE_RANK = Object.freeze({ HOT: 3, WARM: 2, COLD: 1 });
 
 export class MarketingService {
@@ -282,11 +285,11 @@ export class MarketingService {
       filters: [["orgId", "==", orgId]],
       limit: MAX_SEGMENT_CONTACTS
     });
-    const contacts = result.items
+    const segmentContacts = result.items
       .filter((contact) => relationshipTypes.includes(contact.relationshipType || "PROSPECT"))
-      .filter((contact) => contact.status === "ACTIVE")
-      .filter((contact) => !input.onlyOptedIn || contact.marketingConsent?.status === "OPTED_IN" || contact.marketingOptIn === true)
       .sort((left, right) => String(left.contactId || left.id).localeCompare(String(right.contactId || right.id)));
+    const filtered = await this.filterRepeatRecipients(orgId, segmentContacts);
+    const contacts = filtered.contacts;
     if (!contacts.length) throw new ConflictError(`No active ${relationshipType === "EXISTING_CLIENT" ? "existing clients" : "prospects"} were found`);
     const batchSize = Math.min(Number(input.batchSize) || MAX_RECIPIENTS_PER_BATCH, MAX_RECIPIENTS_PER_BATCH);
     const chunks = chunk(contacts, batchSize);
@@ -325,12 +328,15 @@ export class MarketingService {
       action: "MARKETING_AUDIENCE_BATCHES_CREATED",
       entityType: "MARKETING_AUDIENCE_GROUP",
       entityId: batchGroupId,
-      after: { relationshipType, totalContacts: contacts.length, batchCount: created.length, batchSize }
+      after: { relationshipType, totalContacts: contacts.length, excludedContacts: filtered.excludedTotal, exclusionCounts: filtered.exclusionCounts, batchCount: created.length, batchSize }
     });
     return {
       batchGroupId,
       relationshipType,
+      scannedContacts: segmentContacts.length,
       totalContacts: contacts.length,
+      excludedContacts: filtered.excludedTotal,
+      exclusionCounts: filtered.exclusionCounts,
       batchSize,
       batchCount: created.length,
       audiences: created
@@ -450,7 +456,10 @@ export class MarketingService {
     return {
       directSendGroupId: batches.batchGroupId,
       relationshipType: "EXISTING_CLIENT",
+      scannedContacts: batches.scannedContacts,
       totalContacts: batches.totalContacts,
+      excludedContacts: batches.excludedContacts,
+      exclusionCounts: batches.exclusionCounts,
       batchCount: batches.batchCount,
       batchSize: batches.batchSize,
       intervalDays,
@@ -468,8 +477,9 @@ export class MarketingService {
       limit: MAX_SEGMENT_CONTACTS
     });
     const contacts = result.items.filter((contact) => contact.relationshipType === "EXISTING_CLIENT");
+    const filtered = await this.filterRepeatRecipients(orgId, contacts);
     const reasons = contacts.map((contact) => eligibilityReason(contact));
-    const addressable = reasons.filter((reason) => reason === null).length;
+    const addressable = filtered.contacts.length;
     const resolvedBatchSize = Math.min(
       Math.max(Number(batchSize) || DAILY_MARKETING_BATCH_SIZE, 1),
       MAX_RECIPIENTS_PER_BATCH
@@ -479,7 +489,11 @@ export class MarketingService {
       optedOut: reasons.filter((reason) => reason === "OPTED_OUT").length,
       noPhone: reasons.filter((reason) => reason === "INVALID_PHONE").length,
       optInNotRecorded: reasons.filter((reason) => reason === "OPT_IN_NOT_RECORDED").length,
-      inactiveOrOther: reasons.filter((reason) => reason && !["OPTED_OUT", "INVALID_PHONE", "OPT_IN_NOT_RECORDED"].includes(reason)).length
+      inactiveOrOther: reasons.filter((reason) => reason && !["OPTED_OUT", "INVALID_PHONE", "OPT_IN_NOT_RECORDED"].includes(reason)).length,
+      alreadySent: filtered.exclusionCounts.ALREADY_SENT || 0,
+      queuedOrSending: filtered.exclusionCounts.QUEUED_OR_SENDING || 0,
+      deliveryUncertain: filtered.exclusionCounts.DELIVERY_UNCERTAIN || 0,
+      duplicateNumber: filtered.exclusionCounts.DUPLICATE_NUMBER || 0
     };
     return {
       totalExistingClients: contacts.length,
@@ -490,9 +504,115 @@ export class MarketingService {
       dailyBatches,
       daysToComplete: dailyBatches,
       note: addressable
-        ? `${addressable} opted-in existing clients can be scheduled across ${dailyBatches} daily batch(es).`
+        ? `${addressable} eligible existing clients can be scheduled across ${dailyBatches} daily batch(es); previous, pending, uncertain and duplicate recipients are excluded.`
         : "No existing client is currently eligible. Record explicit WhatsApp marketing opt-in before scheduling."
     };
+  }
+
+  async filterRepeatRecipients(orgId, contacts, { excludeCampaignId = null } = {}) {
+    const previousReasons = await this.recipientHistoryReasons(orgId, contacts, { excludeCampaignId });
+    const exclusionCounts = {};
+    const included = [];
+    const seenPhones = new Set();
+    for (const contact of contacts) {
+      const contactId = contact.contactId || contact.id;
+      const phone = normalizePhone(contact.primaryPhone);
+      let reason = eligibilityReason(contact) || previousReasons.get(contactId) || null;
+      if (!reason && seenPhones.has(phone)) reason = "DUPLICATE_NUMBER";
+      if (reason) {
+        exclusionCounts[reason] = (exclusionCounts[reason] || 0) + 1;
+        continue;
+      }
+      seenPhones.add(phone);
+      included.push(contact);
+    }
+    return {
+      contacts: included,
+      scannedTotal: contacts.length,
+      excludedTotal: contacts.length - included.length,
+      exclusionCounts,
+      previousReasons
+    };
+  }
+
+  async recipientHistoryReasons(orgId, contacts, { excludeCampaignId = null } = {}) {
+    const reasons = new Map();
+    const ids = new Set(contacts.map((contact) => contact.contactId || contact.id));
+    const contactsById = new Map(contacts.map((contact) => [contact.contactId || contact.id, contact]));
+    const contactsWithMarketingMessages = new Set();
+    const phoneToIds = new Map();
+    for (const contact of contacts) {
+      const contactId = contact.contactId || contact.id;
+      const phone = normalizePhone(contact.primaryPhone);
+      if (phone) phoneToIds.set(phone, [...(phoneToIds.get(phone) || []), contactId]);
+      if (contact.crmV1LastMarketingAtMs) setRecipientReason(reasons, contactId, "ALREADY_SENT");
+    }
+
+    const destinations = contacts.map((contact) => canonicalDestination(contact.primaryPhone, contact.phoneCountryCode));
+    const stateKeys = destinations.filter(Boolean).map((destination) => destinationKey(orgId, destination));
+    const states = await this.store.getMany("marketingDestinationState", stateKeys);
+    for (const state of states) {
+      const phone = normalizePhone(state.e164);
+      const recipientIds = phoneToIds.get(phone) || [];
+      const slots = Array.isArray(state.slots) ? state.slots : [];
+      const reason = state.reviewRequired || slots.some((slot) => slot.state === "submission_unknown")
+        ? "DELIVERY_UNCERTAIN"
+        : state.lastAcceptedAt
+          ? "ALREADY_SENT"
+          : slots.some((slot) => slot.state === "submitting")
+            ? "QUEUED_OR_SENDING"
+            : null;
+      if (reason) recipientIds.forEach((contactId) => setRecipientReason(reasons, contactId, reason));
+    }
+
+    const messages = await this.scanOrgCollection(COLLECTIONS.messages, orgId);
+    for (const message of messages) {
+      if (!ids.has(message.contactId) || message.direction !== "OUTBOUND" || !isMarketingMessage(message)) continue;
+      if (message.metadata?.campaignId === excludeCampaignId) continue;
+      contactsWithMarketingMessages.add(message.contactId);
+      if (message.status === "DELIVERY_UNKNOWN" || message.submissionState === "submission_unknown") {
+        setRecipientReason(reasons, message.contactId, "DELIVERY_UNCERTAIN");
+      } else if (message.submissionState === "accepted" || ["SENT", "DELIVERED", "READ"].includes(message.status)) {
+        setRecipientReason(reasons, message.contactId, "ALREADY_SENT");
+      } else if (["QUEUED", "SENDING"].includes(message.status)) {
+        setRecipientReason(reasons, message.contactId, "QUEUED_OR_SENDING");
+      }
+    }
+
+    const enrollments = await this.scanOrgCollection(COLLECTIONS.campaignEnrollments, orgId);
+    for (const enrollment of enrollments) {
+      if (!ids.has(enrollment.contactId) || enrollment.campaignId === excludeCampaignId) continue;
+      if (IN_FLIGHT_ENROLLMENT_STATUSES.has(enrollment.status)) {
+        setRecipientReason(reasons, enrollment.contactId, "QUEUED_OR_SENDING");
+      } else if (enrollment.status === "COMPLETED" && !contactsWithMarketingMessages.has(enrollment.contactId)) {
+        setRecipientReason(reasons, enrollment.contactId, "ALREADY_SENT");
+      }
+    }
+    for (const contactId of ids) {
+      const contact = contactsById.get(contactId);
+      if (!contactsWithMarketingMessages.has(contactId)
+        && (contact?.lastMarketingMessageAt || contact?.marketingSendHistory?.length)) {
+        setRecipientReason(reasons, contactId, "ALREADY_SENT");
+      }
+    }
+    return reasons;
+  }
+
+  async scanOrgCollection(collection, orgId) {
+    const items = [];
+    let cursor = null;
+    do {
+      const remaining = MAX_RECIPIENT_HISTORY_ROWS - items.length;
+      if (remaining <= 0) break;
+      const page = await this.store.find(collection, {
+        filters: [["orgId", "==", orgId]],
+        limit: Math.min(500, remaining),
+        cursor
+      });
+      items.push(...page.items);
+      cursor = page.pagination?.hasMore ? decodeCursor(page.pagination.nextCursor) : null;
+    } while (cursor);
+    return items;
   }
 
   async updateAudience(orgId, audienceId, input, actor = {}) {
@@ -718,16 +838,25 @@ export class MarketingService {
     }
     const startAt = campaign.status === "SCHEDULED" && requestedStartAt.getTime() < Date.now() ? now() : requestedStartAt;
     const firstStep = campaign.steps[0];
+    const repeatFilter = await this.filterRepeatRecipients(orgId, audience.contacts, { excludeCampaignId: campaignId });
+    const repeatReasons = repeatFilter.previousReasons;
+    const allowedContactIds = new Set(repeatFilter.contacts.map((contact) => contact.contactId || contact.id));
+    const seenPhones = new Set();
     const enrollmentItems = [];
     let eligible = 0;
     let waiting = 0;
     let suppressed = 0;
     for (const contact of audience.contacts) {
+      const contactId = contact.contactId || contact.id;
+      const phone = normalizePhone(contact.primaryPhone);
       const frequency = this.smartMessages?.marketingFrequency(contact, campaign.templateId, startAt);
       const reason = eligibilityReason(contact)
+        || repeatReasons.get(contactId)
+        || (!allowedContactIds.has(contactId) && seenPhones.has(phone) ? "DUPLICATE_NUMBER" : null)
         || (frequency?.limitReached ? "FREQUENCY_LIMIT" : null)
         || (frequency?.cooldownActive ? "COOLDOWN_ACTIVE" : null);
       const isEligible = !reason;
+      if (isEligible) seenPhones.add(phone);
       const openWindow = serviceWindowForContact(contact, startAt).open;
       const waitsForReply = isEligible
         && campaign.deliveryMode === "OPEN_WINDOW_ONLY"
@@ -744,7 +873,7 @@ export class MarketingService {
           orgId,
           campaignId,
           audienceId: audience.audienceId,
-          contactId: contact.contactId,
+          contactId,
           conversationId: null,
           status,
           suppressionReason: isEligible ? null : reason,
@@ -1300,6 +1429,22 @@ function eligibilityReason(contact) {
   if (contact.marketingOptOut === true) return "OPTED_OUT";
   if (contact.marketingConsent?.status !== "OPTED_IN" && contact.marketingOptIn !== true) return "OPT_IN_NOT_RECORDED";
   return null;
+}
+
+function isMarketingMessage(message) {
+  const metadata = message.metadata || {};
+  return Boolean(
+    metadata.campaignId
+    || metadata.marketingPurpose
+    || metadata.templateCategory === "MARKETING"
+    || metadata.messageDecisionMode === "MARKETING_TEMPLATE"
+  );
+}
+
+function setRecipientReason(reasons, contactId, reason) {
+  const priority = { QUEUED_OR_SENDING: 1, ALREADY_SENT: 2, DELIVERY_UNCERTAIN: 3 };
+  const current = reasons.get(contactId);
+  if (!current || (priority[reason] || 0) > (priority[current] || 0)) reasons.set(contactId, reason);
 }
 
 function contactSummary(contact) {

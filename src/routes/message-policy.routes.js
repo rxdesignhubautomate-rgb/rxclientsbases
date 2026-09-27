@@ -3,6 +3,7 @@ import { authorizeRole, authorizePermission } from "../middleware/authorize.js";
 import { validate } from "../middleware/validate.js";
 import { sendData, sendList } from "../utils/http.js";
 import { decodeCursor, listQuery } from "../utils/pagination.js";
+import { normalizePhone } from "../utils/phone.js";
 import { validateTemplateHeaderMedia } from "../services/template-header-media.js";
 import { COLLECTIONS } from "../config/constants.js";
 import { ConflictError } from "../utils/errors.js";
@@ -12,6 +13,7 @@ import {
   marketingCampaignSchema,
   marketingLaunchSchema,
   orderConfirmationBatchSchema,
+  utilityBatchSchema,
   orderConfirmationEventSchema,
   orderUpdateEventSchema,
   smartMessageSchema
@@ -125,6 +127,33 @@ export function messagePolicyRoutes(container) {
     });
   }));
 
+  router.get("/events/utility/batch/orders", authorizeRole("OWNER", "ADMIN"), wrap(async (req, res) => {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 500, 1), 1000);
+    const result = await container.store.find(COLLECTIONS.orders, {
+      filters: [["orgId", "==", req.auth.orgId]],
+      cursor: decodeCursor(req.query.cursor),
+      limit
+    });
+    const activeStatuses = new Set(UTILITY_BATCH_ACTIVE_ORDER_STATUSES);
+    return sendList(res, {
+      ...result,
+      items: result.items.filter((order) => activeStatuses.has(String(order.status || "").toUpperCase()))
+    });
+  }));
+
+  router.post("/events/utility/batch", authorizeRole("OWNER", "ADMIN"), validate(utilityBatchSchema), wrap(async (req, res) => {
+    const { template } = await container.templateRegistry.resolveApprovedUtility(req.auth.orgId, req.body.templateKey);
+    const templateAttachmentIds = await validateTemplateHeaderMedia({
+      media: container.media,
+      orgId: req.auth.orgId,
+      contactId: null,
+      template,
+      attachmentIds: req.body.templateAttachmentId ? [req.body.templateAttachmentId] : [],
+      allowSharedUtilityAsset: true
+    });
+    return sendData(res, await sendUtilityBatch(container, req, template, templateAttachmentIds), 202);
+  }));
+
   router.post("/events/order-confirmed/batch", authorizeRole("OWNER", "ADMIN"), validate(orderConfirmationBatchSchema), wrap(async (req, res) => {
     const template = container.templateRegistry.resolve(req.body.templateKey, "UTILITY");
     await container.templateRegistry.assertApproved(req.auth.orgId, req.body.templateKey);
@@ -141,6 +170,8 @@ export function messagePolicyRoutes(container) {
       ? await container.store.getMany(COLLECTIONS.orders, req.body.orderIds)
       : await Promise.all(req.body.orderIds.map((orderId) => container.store.get(COLLECTIONS.orders, orderId)));
     const orderById = new Map(orders.filter(Boolean).map((order) => [order.orderId || order.id, order]));
+    const history = await utilityBatchHistory(container.store, req.auth.orgId, req.body.templateKey);
+    const seenDestinations = new Set();
     const results = [];
 
     for (let index = 0; index < req.body.orderIds.length; index += 5) {
@@ -155,6 +186,17 @@ export function messagePolicyRoutes(container) {
           }
           const contact = await container.contacts.get(req.auth.orgId, order.contactId);
           if (contact.relationshipType !== "EXISTING_CLIENT") return batchResult(orderId, "SKIPPED", "NOT_EXISTING_CLIENT", contact);
+          const historyReason = history.get(orderId);
+          if (historyReason) return batchResult(orderId, "SKIPPED", historyReason, contact);
+          if (contact.suppressed === true || contact.status === "BLOCKED" || contact.stopAllCommunications === true) {
+            return batchResult(orderId, "SKIPPED", "SUPPRESSED", contact);
+          }
+          if (contact.marketingOptOut === true || contact.marketingConsent?.status === "OPTED_OUT" || contact.optInStatus === "OPTED_OUT") {
+            return batchResult(orderId, "SKIPPED", "OPTED_OUT", contact);
+          }
+          const destination = normalizePhone(contact.primaryPhone) || `CONTACT:${contact.contactId}`;
+          if (seenDestinations.has(destination)) return batchResult(orderId, "SKIPPED", "DUPLICATE_NUMBER", contact);
+          seenDestinations.add(destination);
           const sendResult = await container.smartMessages.smartSend(req.auth.orgId, {
             contactId: contact.contactId,
             eventType: "ORDER_CONFIRMATION",
@@ -179,12 +221,16 @@ export function messagePolicyRoutes(container) {
       results.push(...chunkResults);
     }
 
+    const exclusionCounts = results
+      .filter((item) => item.status === "SKIPPED")
+      .reduce((counts, item) => ({ ...counts, [item.reason]: (counts[item.reason] || 0) + 1 }), {});
     return sendData(res, {
       batchId,
       requested: req.body.orderIds.length,
       queued: results.filter((item) => item.status === "QUEUED").length,
       skipped: results.filter((item) => item.status === "SKIPPED").length,
       failed: results.filter((item) => item.status === "FAILED").length,
+      exclusionCounts,
       results
     }, 202);
   }));
@@ -257,6 +303,101 @@ function formatOrderValue(order) {
   return `${order.currency || "INR"} ${Number.isFinite(value) ? value.toLocaleString("en-IN") : "0"}`;
 }
 
+async function sendUtilityBatch(container, req, template, templateAttachmentIds) {
+  const batchId = `UTILITY_BATCH_${Date.now()}_${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  const orders = container.store.getMany
+    ? await container.store.getMany(COLLECTIONS.orders, req.body.orderIds)
+    : await Promise.all(req.body.orderIds.map((orderId) => container.store.get(COLLECTIONS.orders, orderId)));
+  const orderById = new Map(orders.filter(Boolean).map((order) => [order.orderId || order.id, order]));
+  const history = await utilityBatchHistory(container.store, req.auth.orgId, req.body.templateKey);
+  const seenDestinations = new Set();
+  const results = [];
+
+  for (let index = 0; index < req.body.orderIds.length; index += 5) {
+    const chunk = req.body.orderIds.slice(index, index + 5);
+    const chunkResults = await Promise.all(chunk.map(async (orderId) => {
+      try {
+        const order = orderById.get(orderId);
+        if (!order || order.orgId !== req.auth.orgId) return batchResult(orderId, "SKIPPED", "ORDER_NOT_FOUND");
+        if (!order.contactId) return batchResult(orderId, "SKIPPED", "ORDER_HAS_NO_LINKED_CLIENT");
+        if (TERMINAL_ORDER_STATUSES.has(String(order.status || "").toUpperCase())) {
+          return batchResult(orderId, "SKIPPED", `ORDER_STATUS_${String(order.status).toUpperCase()}`);
+        }
+        const contact = await container.contacts.get(req.auth.orgId, order.contactId);
+        if (contact.relationshipType !== "EXISTING_CLIENT") return batchResult(orderId, "SKIPPED", "NOT_EXISTING_CLIENT", contact);
+        const historyReason = history.get(orderId);
+        if (historyReason) return batchResult(orderId, "SKIPPED", historyReason, contact);
+        if (contact.suppressed === true || contact.status === "BLOCKED" || contact.stopAllCommunications === true) {
+          return batchResult(orderId, "SKIPPED", "SUPPRESSED", contact);
+        }
+        if (contact.marketingOptOut === true || contact.marketingConsent?.status === "OPTED_OUT" || contact.optInStatus === "OPTED_OUT") {
+          return batchResult(orderId, "SKIPPED", "OPTED_OUT", contact);
+        }
+        const destination = normalizePhone(contact.primaryPhone) || `CONTACT:${contact.contactId}`;
+        if (seenDestinations.has(destination)) return batchResult(orderId, "SKIPPED", "DUPLICATE_NUMBER", contact);
+        seenDestinations.add(destination);
+        const sendResult = await container.smartMessages.smartSend(req.auth.orgId, {
+          contactId: contact.contactId,
+          eventType: template.eventType || "GENERIC_UTILITY_UPDATE",
+          requestedByCustomer: true,
+          requestedMode: "UTILITY_TEMPLATE",
+          isPromotional: false,
+          orderId,
+          templateKey: req.body.templateKey,
+          templateAttachmentIds,
+          templateData: utilityTemplateData(template, contact, order, req.body.variableValues),
+          idempotencyKey: `UTILITY:${template.key}:${orderId}`,
+          metadata: { utilityBatchId: batchId, source: "APPROVED_UTILITY_BATCH" }
+        }, req.auth);
+        return batchResult(orderId, sendResult.queued ? "QUEUED" : "SKIPPED", sendResult.reason, contact, sendResult.messageId);
+      } catch (error) {
+        return batchResult(orderId, "FAILED", error.message || "BATCH_SEND_FAILED");
+      }
+    }));
+    results.push(...chunkResults);
+  }
+
+  const exclusionCounts = results
+    .filter((item) => item.status === "SKIPPED")
+    .reduce((counts, item) => ({ ...counts, [item.reason]: (counts[item.reason] || 0) + 1 }), {});
+  return {
+    batchId,
+    templateKey: template.key,
+    templateName: template.name,
+    requested: req.body.orderIds.length,
+    queued: results.filter((item) => item.status === "QUEUED").length,
+    skipped: results.filter((item) => item.status === "SKIPPED").length,
+    failed: results.filter((item) => item.status === "FAILED").length,
+    exclusionCounts,
+    results
+  };
+}
+
+function utilityTemplateData(template, contact, order, supplied = {}) {
+  const context = {
+    customer_name: contact.contactPerson || contact.companyName || "Customer",
+    company_name: contact.companyName || contact.contactPerson || "Customer",
+    contact_person: contact.contactPerson || contact.companyName || "Customer",
+    order_reference: order.orderNumber || order.externalOrderId || order.orderId || order.id,
+    order_value: formatOrderValue(order),
+    amount_due: String(order.amountDue ?? order.balanceAmount ?? order.pendingAmount ?? formatOrderValue(order)),
+    order_status: String(order.status || "").replaceAll("_", " "),
+    city: contact.city || order.city || order.deliveryAddress?.city || "",
+    courier_name: order.courierName || "",
+    tracking_reference: order.trackingNumber || order.trackingReference || ""
+  };
+  const positionalDefaults = ["customer_name", "order_reference", "order_status", "order_value"];
+  return (template.variables || []).reduce((values, field, index) => {
+    const namedKey = String(field.key || "").replace(/^header_/, "");
+    const fallbackKey = Object.hasOwn(context, namedKey) ? namedKey : positionalDefaults[index];
+    const rawValue = Object.hasOwn(supplied, field.key) ? supplied[field.key] : `{{${fallbackKey}}}`;
+    const value = String(rawValue || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => context[key] ?? "").trim();
+    if (!value) throw new ConflictError(`Value is required for template variable ${field.label || field.key}`);
+    values[field.key] = value;
+    return values;
+  }, {});
+}
+
 function batchResult(orderId, status, reason = null, contact = null, messageId = null) {
   return {
     orderId,
@@ -266,6 +407,40 @@ function batchResult(orderId, status, reason = null, contact = null, messageId =
     customer: contact?.companyName || contact?.contactPerson || null,
     messageId: messageId || null
   };
+}
+
+async function utilityBatchHistory(store, orgId, templateKey) {
+  const reasons = new Map();
+  let cursor = null;
+  let scanned = 0;
+  do {
+    const page = await store.find(COLLECTIONS.messages, {
+      filters: [["orgId", "==", orgId]],
+      cursor,
+      limit: Math.min(500, 100000 - scanned)
+    });
+    scanned += page.items.length;
+    for (const message of page.items) {
+      const metadata = message.metadata || {};
+      if (message.direction !== "OUTBOUND" || metadata.templateCategory !== "UTILITY" || metadata.templateKey !== templateKey || !metadata.orderId) continue;
+      const reason = message.status === "DELIVERY_UNKNOWN" || message.submissionState === "submission_unknown"
+        ? "DELIVERY_UNCERTAIN"
+        : message.submissionState === "accepted" || ["SENT", "DELIVERED", "READ"].includes(message.status)
+          ? "ALREADY_SENT"
+          : ["QUEUED", "SENDING"].includes(message.status)
+            ? "QUEUED_OR_SENDING"
+            : null;
+      if (reason) setUtilityHistoryReason(reasons, metadata.orderId, reason);
+    }
+    cursor = scanned < 100000 && page.pagination?.hasMore ? decodeCursor(page.pagination.nextCursor) : null;
+  } while (cursor);
+  return reasons;
+}
+
+function setUtilityHistoryReason(reasons, orderId, reason) {
+  const priority = { QUEUED_OR_SENDING: 1, ALREADY_SENT: 2, DELIVERY_UNCERTAIN: 3 };
+  const current = reasons.get(orderId);
+  if (!current || priority[reason] > priority[current]) reasons.set(orderId, reason);
 }
 
 function wrap(handler) {

@@ -4,16 +4,31 @@ import { describe, expect, it, vi } from "vitest";
 import { messagePolicyRoutes } from "../src/routes/message-policy.routes.js";
 import { errorHandler } from "../src/middleware/error-handler.js";
 
-function testApp() {
+function testApp(options = {}) {
   const smartSend = vi.fn().mockResolvedValue({ queued: true, reason: "VERIFIED", messageId: "MSG_1001" });
-  const orders = [
+  const orders = options.orders || [
     { orderId: "ORD_1001", orgId: "RXDH", contactId: "CON_1001", orderNumber: "1001", status: "CONFIRMED", currency: "INR", totalAmount: 25000 },
     { orderId: "ORD_1002", orgId: "RXDH", contactId: "CON_1002", orderNumber: "1002", status: "DELIVERED", currency: "INR", totalAmount: 5000 }
   ];
   const container = {
     templateRegistry: {
       resolve: () => ({ key: "order_confirmation", category: "UTILITY", header: { type: "VIDEO", required: true } }),
-      assertApproved: vi.fn().mockResolvedValue({ status: "APPROVED" })
+      assertApproved: vi.fn().mockResolvedValue({ status: "APPROVED" }),
+      resolveApprovedUtility: vi.fn().mockResolvedValue({
+        template: {
+          key: "meta:TPL_NEW",
+          name: "new_order_update",
+          category: "UTILITY",
+          eventType: "GENERIC_UTILITY_UPDATE",
+          body: "Hello {{customer_name}}, order {{2}} is {{3}}.",
+          header: null,
+          variables: [
+            { key: "customer_name", label: "Customer name" },
+            { key: "variable_2", label: "Variable 2" },
+            { key: "variable_3", label: "Variable 3" }
+          ]
+        }
+      })
     },
     media: {
       get: vi.fn().mockResolvedValue({ attachmentId: "ATT_BATCH_VIDEO", orgId: "RXDH", purpose: "UTILITY_TEMPLATE_ASSET", mimeType: "video/mp4" })
@@ -26,7 +41,7 @@ function testApp() {
               { contactId: "CON_1001", orgId: "RXDH", relationshipType: "EXISTING_CLIENT", companyName: "Alpha Pharma" },
               { contactId: "CON_PROSPECT", orgId: "RXDH", relationshipType: "PROSPECT", companyName: "Prospect Pharma" }
             ]
-          : orders,
+          : collection === "messages" ? (options.messages || []) : orders,
         pagination: { nextCursor: null, hasMore: false }
       }))
     },
@@ -34,7 +49,8 @@ function testApp() {
       get: vi.fn().mockImplementation(async (_orgId, contactId) => ({
         contactId,
         relationshipType: "EXISTING_CLIENT",
-        companyName: contactId === "CON_1001" ? "Alpha Pharma" : "Beta Pharma"
+        companyName: contactId === "CON_1001" ? "Alpha Pharma" : "Beta Pharma",
+        primaryPhone: contactId === "CON_1001" ? "9876500101" : "9876500102"
       }))
     },
     smartMessages: { smartSend }
@@ -104,5 +120,69 @@ describe("verified order Utility batch route", () => {
 
     expect(response.status).toBe(400);
     expect(smartSend).not.toHaveBeenCalled();
+  });
+
+  it("skips utility orders already sent while allowing a confirmed failure to retry", async () => {
+    const orders = [
+      { orderId: "ORD_1001", orgId: "RXDH", contactId: "CON_1001", orderNumber: "1001", status: "CONFIRMED" },
+      { orderId: "ORD_1003", orgId: "RXDH", contactId: "CON_1003", orderNumber: "1003", status: "CONFIRMED" }
+    ];
+    const messages = [
+      { messageId: "MSG_OLD_SENT", orgId: "RXDH", contactId: "CON_1001", direction: "OUTBOUND", status: "DELIVERED", submissionState: "accepted", metadata: { templateCategory: "UTILITY", templateKey: "order_confirmation", orderId: "ORD_1001" } },
+      { messageId: "MSG_OLD_FAILED", orgId: "RXDH", contactId: "CON_1003", direction: "OUTBOUND", status: "FAILED", submissionState: "failed", metadata: { templateCategory: "UTILITY", templateKey: "order_confirmation", orderId: "ORD_1003" } }
+    ];
+    const { app, smartSend } = testApp({ orders, messages });
+    const response = await request(app).post("/events/order-confirmed/batch").send({
+      orderIds: ["ORD_1001", "ORD_1003"],
+      templateKey: "order_confirmation",
+      templateAttachmentId: "ATT_BATCH_VIDEO",
+      confirmTransactionalUse: true
+    });
+
+    expect(response.status).toBe(202);
+    expect(response.body.data).toMatchObject({
+      requested: 2,
+      queued: 1,
+      skipped: 1,
+      exclusionCounts: { ALREADY_SENT: 1 }
+    });
+    expect(smartSend).toHaveBeenCalledTimes(1);
+    expect(smartSend.mock.calls[0][1].orderId).toBe("ORD_1003");
+  });
+
+  it("queues a newly synced Utility template with per-order variable mappings", async () => {
+    const { app, smartSend } = testApp();
+    const response = await request(app).post("/events/utility/batch").send({
+      orderIds: ["ORD_1001"],
+      templateKey: "meta:TPL_NEW",
+      variableValues: {
+        customer_name: "{{customer_name}}",
+        variable_2: "{{order_reference}}",
+        variable_3: "{{order_status}}"
+      },
+      confirmTransactionalUse: true
+    });
+
+    expect(response.status).toBe(202);
+    expect(response.body.data).toMatchObject({
+      templateKey: "meta:TPL_NEW",
+      templateName: "new_order_update",
+      requested: 1,
+      queued: 1,
+      skipped: 0,
+      failed: 0
+    });
+    expect(smartSend).toHaveBeenCalledWith("RXDH", expect.objectContaining({
+      eventType: "GENERIC_UTILITY_UPDATE",
+      orderId: "ORD_1001",
+      templateKey: "meta:TPL_NEW",
+      templateAttachmentIds: [],
+      templateData: {
+        customer_name: "Alpha Pharma",
+        variable_2: "1001",
+        variable_3: "CONFIRMED"
+      },
+      idempotencyKey: "UTILITY:meta:TPL_NEW:ORD_1001"
+    }), expect.any(Object));
   });
 });
